@@ -1,0 +1,11 @@
+# Build output: keep only what the source zip ships (libc++ config headers and the prebuilt .so)
+/out/*
+!/out/libcxx/
+!/out/android/
+/out/android/*
+!/out/android/libshantaedual.so
+__pycache__/
+# Signing keys stay private (tools/build_*_apk.sh makes a new one if missing)
+/tools/*.keystore*
+# The earlier DS attempt (GameYob copy + build output): kept local
+/nds/

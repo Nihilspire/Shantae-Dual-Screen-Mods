@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; -webkit-user-select: none; user-select: none; }
+  #c { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; }
+  #hud { position: absolute; display: none; image-rendering: pixelated; pointer-events: none; }
+  #lab { position: absolute; left: 0; right: 0; top: 4%; text-align: center; display: none; pointer-events: none;
+         font: bold 20px monospace; letter-spacing: 3px; color: #f8c048; text-shadow: 2px 2px 0 #000, -1px -1px 0 #000; }
+</style></head>
+<body><canvas id="c"></canvas><canvas id="hud" width="160" height="144"></canvas><div id="lab"></div>
+<script src="view3d.js"></script></body></html>

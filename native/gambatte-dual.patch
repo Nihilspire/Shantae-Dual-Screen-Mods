@@ -1,0 +1,593 @@
+diff --git a/libgambatte/include/gambatte.h b/libgambatte/include/gambatte.h
+index 7e5c43b..af5234d 100644
+--- a/libgambatte/include/gambatte.h
++++ b/libgambatte/include/gambatte.h
+@@ -147,6 +147,11 @@ public:
+    void *rombank1_ptr() const;
+    void *zeropage_ptr() const;
+    void *oamram_ptr() const;
++   unsigned peek(unsigned a) const;
++   void poke(unsigned a, unsigned v);
++   void dualJump(unsigned pc, unsigned sp, unsigned bank);   /* Dual: dev room warp */
++   void dualWrite(unsigned a, unsigned v);                   /* Dual: CPU-style write (MBC/IO side effects) */
++   const unsigned char *cgbpal(int obj) const;
+ #endif
+ 
+ private:
+diff --git a/libgambatte/libretro/libretro.cpp b/libgambatte/libretro/libretro.cpp
+index 15b042c..1a10b24 100644
+--- a/libgambatte/libretro/libretro.cpp
++++ b/libgambatte/libretro/libretro.cpp
+@@ -32,8 +32,8 @@
+ 
+ #include <cassert>
+ #include <cstdio>
+-#include <fstream>
+-#include <sstream>
++/* Dual: <fstream> not used */
++/* Dual: <sstream> not used */
+ #include <cstdlib>
+ #include <string>
+ #include <cstring>
+@@ -53,6 +53,7 @@ static retro_audio_sample_batch_t audio_batch_cb;
+ static retro_environment_t environ_cb;
+ static gambatte::video_pixel_t* video_buf;
+ static gambatte::GB gb;
++extern "C" void gbx_draw_overflow(gambatte::video_pixel_t *buf, int pitch);
+ 
+ static bool libretro_supports_option_categories = false;
+ static bool libretro_supports_bitmasks          = false;
+@@ -2959,6 +2960,9 @@ void retro_run()
+    while (gb2.runFor(video_buf + GB_SCREEN_WIDTH, VIDEO_PITCH, sound_buf.u32, samples) == -1) {}
+ #endif
+ 
++   /* Dual: sprites past the 10-per-line limit (NO SPRITE LIMIT), before blending */
++   gbx_draw_overflow(video_buf, VIDEO_PITCH);
++
+    /* Perform interframe blending, if required */
+    if (blend_frames)
+       blend_frames();
+diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
+index 0fb6199..336e7e4 100644
+--- a/libgambatte/src/cpu.cpp
++++ b/libgambatte/src/cpu.cpp
+@@ -135,18 +135,33 @@ void CPU::loadState(SaveState const &state) {
+ // time they were written GCC had a tendency to not be able to keep hot variables
+ // in regs if you took an address/reference in an inline function.
+ 
++/* Dual: "NO SLOWDOWN" overclock. Memory cycles cost 4 >> gbx_overclock, so the CPU runs faster
++ * relative to the PPU, APU and timers, which keep their normal timing. */
++extern "C" { int gbx_overclock = 0; }
++/* OAM DMA keeps the normal speed: games wait for it with a cycle-counted loop in HRAM. */
++#define GBX_M (gbxOc ? 4u >> !mem_.dmaActive() : 4u)   /* gbxOc: process() reads gbx_overclock once */
++
+ #define bc() ( b << 8 | c )
+ #define de() ( d << 8 | e )
+ #define hl() ( h << 8 | l )
+ 
+-#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); cycleCounter += 4; } while (0)
+-#define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += 4; } while (0)
+-#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += 4; } while (0)
+-
+-#define WRITE(addr, data) do { mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
+-#define FF_WRITE(addr, data) do { mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
++#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); cycleCounter += GBX_M; } while (0)
++#define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += GBX_M; } while (0)
++#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += GBX_M; } while (0)
++
++#ifdef GBX_TRACE
++extern "C" void gbx_trace_write(unsigned addr, unsigned data, unsigned pc, unsigned bank, unsigned hl, unsigned sp);
++extern "C" int gbx_trace_on;
++extern "C" int gbx_pctrace_on;
++extern "C" void gbx_pctrace(unsigned pc, unsigned bank, unsigned op, unsigned a, unsigned hl, unsigned de);
++#define TRACE_W(addr, data) do { if (gbx_trace_on) gbx_trace_write((addr), (data), pc, mem_.rombank(), hl(), sp); } while (0)
++#else
++#define TRACE_W(addr, data) do {} while (0)
++#endif
++#define WRITE(addr, data) do { TRACE_W(addr, data); mem_.write(addr, data, cycleCounter); cycleCounter += GBX_M; } while (0)
++#define FF_WRITE(addr, data) do { TRACE_W(0xFF00 | (addr), data); mem_.ff_write(addr, data, cycleCounter); cycleCounter += GBX_M; } while (0)
+ 
+-#define PC_MOD(data) do { pc = data; cycleCounter += 4; } while (0)
++#define PC_MOD(data) do { pc = data; cycleCounter += GBX_M; } while (0)
+ 
+ #define PUSH(r1, r2) do { \
+ 	sp = (sp - 1) & 0xFFFF; \
+@@ -300,7 +315,7 @@ void CPU::loadState(SaveState const &state) {
+ // Push value of register pair onto stack:
+ #define push_rr(r1, r2) do { \
+ 	PUSH(r1, r2); \
+-	cycleCounter += 4; \
++	cycleCounter += GBX_M; \
+ } while (0)
+ 
+ // pop rr (12 cycles):
+@@ -418,7 +433,7 @@ void CPU::loadState(SaveState const &state) {
+ 	hf2 = (cf & 0x100) | (rh); \
+ 	cf = h + (cf >> 8) + (rh); \
+ 	h = cf & 0xFF; \
+-	cycleCounter += 4; \
++	cycleCounter += GBX_M; \
+ } while (0)
+ 
+ // inc rr (8 cycles):
+@@ -427,7 +442,7 @@ void CPU::loadState(SaveState const &state) {
+ 	unsigned const lowinc = (rl) + 1; \
+ 	(rl) = lowinc & 0xFF; \
+ 	(rh) = ((rh) + (lowinc >> 8)) & 0xFF; \
+-	cycleCounter += 4; \
++	cycleCounter += GBX_M; \
+ } while (0)
+ 
+ // dec rr (8 cycles):
+@@ -436,7 +451,7 @@ void CPU::loadState(SaveState const &state) {
+ 	unsigned const lowdec = (rl) - 1; \
+ 	(rl) = lowdec & 0xFF; \
+ 	(rh) = ((rh) - (lowdec >> 8 & 1)) & 0xFF; \
+-	cycleCounter += 4; \
++	cycleCounter += GBX_M; \
+ } while (0)
+ 
+ #define sp_plus_n(sumout) do { \
+@@ -448,7 +463,7 @@ void CPU::loadState(SaveState const &state) {
+ 	cf = sp ^ disp ^ res; \
+ 	hf2 = cf << 5 & hf2_hcf; \
+ 	zf = 1; \
+-	cycleCounter += 4; \
++	cycleCounter += GBX_M; \
+ 	(sumout) = res & 0xFFFF; \
+ } while (0)
+ 
+@@ -501,6 +516,7 @@ void CPU::process(unsigned long const cycles) {
+ 
+ 	unsigned char a = a_;
+ 	unsigned long cycleCounter = cycleCounter_;
++	unsigned const gbxOc = gbx_overclock;
+ 
+ 	while (mem_.isActive()) {
+ 		unsigned short pc = pc_;
+@@ -518,6 +534,9 @@ void CPU::process(unsigned long const cycles) {
+ 			unsigned char opcode;
+ 
+ 			PC_READ(opcode);
++#ifdef GBX_TRACE
++			if (gbx_pctrace_on) gbx_pctrace(pc - 1, mem_.rombank(), opcode, a, hl(), de());
++#endif
+ 
+ 			if (skip_) {
+ 				pc = (pc - 1) & 0xFFFF;
+@@ -838,7 +857,7 @@ void CPU::process(unsigned long const cycles) {
+ 
+ 			case 0x33:
+ 				sp = (sp + 1) & 0xFFFF;
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 				break;
+ 
+ 				// inc (hl) (12 cycles):
+@@ -906,7 +925,7 @@ void CPU::process(unsigned long const cycles) {
+ 				cf >>= 8;
+ 				cf += h;
+ 				h = cf & 0xFF;
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 				break;
+ 
+ 				// ldd a,(hl) (8 cycles):
+@@ -915,7 +934,7 @@ void CPU::process(unsigned long const cycles) {
+ 				{
+ 					unsigned addr = hl();
+ 					a = mem_.read(addr, cycleCounter);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 
+ 					addr = (addr - 1) & 0xFFFF;
+ 					l = addr;
+@@ -926,7 +945,7 @@ void CPU::process(unsigned long const cycles) {
+ 
+ 			case 0x3B:
+ 				sp = (sp - 1) & 0xFFFF;
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 				break;
+ 
+ 			case 0x3C:
+@@ -1013,7 +1032,7 @@ void CPU::process(unsigned long const cycles) {
+ 					&& (   mem_.ff_read(0x0F, cycleCounter)
+ 					     & mem_.ff_read(0xFF, cycleCounter) & 0x1F)) {
+ 					if (mem_.isCgb())
+-						cycleCounter += 4;
++						cycleCounter += GBX_M;
+ 					else
+ 						skip_ = true;
+ 				} else {
+@@ -1135,7 +1154,7 @@ void CPU::process(unsigned long const cycles) {
+ 				// ret nz (20;8 cycles):
+ 				// Pop two bytes from the stack and jump to that address, if ZF is unset:
+ 			case 0xC0:
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 
+ 				if (zf & 0xFF)
+ 					ret();
+@@ -1153,7 +1172,7 @@ void CPU::process(unsigned long const cycles) {
+ 					jp_nn();
+ 				} else {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				}
+ 
+ 				break;
+@@ -1170,7 +1189,7 @@ void CPU::process(unsigned long const cycles) {
+ 					call_nn();
+ 				} else {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				}
+ 
+ 				break;
+@@ -1194,7 +1213,7 @@ void CPU::process(unsigned long const cycles) {
+ 				// ret z (20;8 cycles):
+ 				// Pop two bytes from the stack and jump to that address, if ZF is set:
+ 			case 0xC8:
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 
+ 				if (!(zf & 0xFF))
+ 					ret();
+@@ -1212,7 +1231,7 @@ void CPU::process(unsigned long const cycles) {
+ 			case 0xCA:
+ 				if (zf & 0xFF) {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				} else {
+ 					jp_nn();
+ 				}
+@@ -1642,7 +1661,7 @@ void CPU::process(unsigned long const cycles) {
+ 			case 0xCC:
+ 				if (zf & 0xFF) {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				} else {
+ 					call_nn();
+ 				}
+@@ -1669,7 +1688,7 @@ void CPU::process(unsigned long const cycles) {
+ 				// ret nc (20;8 cycles):
+ 				// Pop two bytes from the stack and jump to that address, if CF is unset:
+ 			case 0xD0:
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 
+ 				if (!(cf & 0x100))
+ 					ret();
+@@ -1685,7 +1704,7 @@ void CPU::process(unsigned long const cycles) {
+ 			case 0xD2:
+ 				if (cf & 0x100) {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				} else {
+ 					jp_nn();
+ 				}
+@@ -1701,7 +1720,7 @@ void CPU::process(unsigned long const cycles) {
+ 			case 0xD4:
+ 				if (cf & 0x100) {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				} else {
+ 					call_nn();
+ 				}
+@@ -1728,7 +1747,7 @@ void CPU::process(unsigned long const cycles) {
+ 				// ret c (20;8 cycles):
+ 				// Pop two bytes from the stack and jump to that address, if CF is set:
+ 			case 0xD8:
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 
+ 				if (cf & 0x100)
+ 					ret();
+@@ -1754,7 +1773,7 @@ void CPU::process(unsigned long const cycles) {
+ 					jp_nn();
+ 				} else {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				}
+ 
+ 				break;
+@@ -1770,7 +1789,7 @@ void CPU::process(unsigned long const cycles) {
+ 					call_nn();
+ 				} else {
+ 					PC_MOD((pc + 2) & 0xFFFF);
+-					cycleCounter += 4;
++					cycleCounter += GBX_M;
+ 				}
+ 
+ 				break;
+@@ -1835,7 +1854,7 @@ void CPU::process(unsigned long const cycles) {
+ 				// Add next (signed) byte in memory to SP, reset ZF and SF, check HCF and CF:
+ 			case 0xE8:
+ 				sp_plus_n(sp);
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 				break;
+ 
+ 				// jp hl (4 cycles):
+@@ -1952,7 +1971,7 @@ void CPU::process(unsigned long const cycles) {
+ 				// Put value in HL into SP
+ 			case 0xF9:
+ 				sp = hl();
+-				cycleCounter += 4;
++				cycleCounter += GBX_M;
+ 				break;
+ 
+ 				// ld a,(nn) (16 cycles):
+diff --git a/libgambatte/src/cpu.h b/libgambatte/src/cpu.h
+index 76c29de..f752227 100644
+--- a/libgambatte/src/cpu.h
++++ b/libgambatte/src/cpu.h
+@@ -48,6 +48,16 @@ public:
+    unsigned rtcdata_size() { return mem_.rtcdata_size(); }
+    void clearCheats() { mem_.clearCheats(); }
+    void *vram_ptr() const { return mem_.vram_ptr(); }
++   unsigned peek(unsigned a) const { return mem_.peek(a); }
++   bool oamDmaActive() const { return mem_.oamDmaActive(); }
++   void poke(unsigned a, unsigned v) { mem_.poke(a, v); }
++   /* Dual: dev room warp - continue at bank:pc with a fresh stack and interrupts on (between frames only). */
++   void dualJump(unsigned npc, unsigned nsp, unsigned bank) {
++      mem_.write(0x2000, bank & 0xFF, cycleCounter_); mem_.write(0x3000, (bank >> 8) & 1, cycleCounter_);
++      mem_.dualUnhalt(); skip_ = false; pc_ = npc & 0xFFFF; sp = nsp & 0xFFFF; mem_.ei(cycleCounter_);
++   }
++   void dualWrite(unsigned a, unsigned v) { mem_.write(a & 0xFFFF, v & 0xFF, cycleCounter_); }
++   const unsigned char *cgbpal(int obj) const { return mem_.cgbpal(obj); }
+    void *rambank0_ptr() const { return mem_.rambank0_ptr(); }
+    void *rambank1_ptr() const { return mem_.rambank1_ptr(); }
+    void *rambank2_ptr() const { return mem_.rambank2_ptr(); }
+diff --git a/libgambatte/src/gambatte-memory.cpp b/libgambatte/src/gambatte-memory.cpp
+index c8790fc..e531a1d 100644
+--- a/libgambatte/src/gambatte-memory.cpp
++++ b/libgambatte/src/gambatte-memory.cpp
+@@ -24,6 +24,7 @@
+ #include "bootloader.h"
+ #include <cstring>
+ 
++extern "C" { unsigned gbx_vram_drops = 0; }
+ namespace gambatte {
+ 
+ Memory::Memory(Interrupter const &interrupter) :
+@@ -1153,7 +1154,8 @@ void Memory::nontrivial_write(unsigned const p, unsigned const data, unsigned lo
+ 			} else if (lcd_.vramAccessible(cc)) {
+ 				lcd_.vramChange(cc);
+ 				cart_.vrambankptr()[p] = data;
+-			}
++			} else
++				++gbx_vram_drops;
+ 		} else if (p < 0xC000) {
+ 			if (cart_.wsrambankptr())
+ 				cart_.wsrambankptr()[p] = data;
+diff --git a/libgambatte/src/gambatte-memory.h b/libgambatte/src/gambatte-memory.h
+index d82ca85..471d3be 100644
+--- a/libgambatte/src/gambatte-memory.h
++++ b/libgambatte/src/gambatte-memory.h
+@@ -62,6 +62,32 @@ public:
+    void *rombank1_ptr() const { return cart_.romdata(0) + 0x4000; }
+    void *zeropage_ptr() const { return (void*)(ioamhram_ + 0x0180); }
+    void *oamram_ptr() const { return (void*)ioamhram_; }
++   /* Dual: side-effect free CPU-view access (current ROM/SRAM/WRAM/VRAM banks). */
++   unsigned peek(unsigned a) const {
++      a &= 0xFFFF;
++      if (a >= 0xFE00) return ioamhram_[a - 0xFE00];
++      if (a >= 0xE000) a -= 0x2000;
++      if (a >= 0xD000) return cart_.wramdata(1)[a - 0xD000];
++      if (a >= 0xC000) return cart_.wramdata(0)[a - 0xC000];
++      if (a >= 0xA000) return cart_.rsrambankptr()[a];
++      if (a >= 0x8000) return cart_.vrambankptr()[a];
++      const unsigned char *p = cart_.rmem(a >> 12); return p ? p[a] : 0xFF;
++   }
++   void poke(unsigned a, unsigned v) {
++      a &= 0xFFFF;
++      if (a >= 0xFE00) ioamhram_[a - 0xFE00] = v;
++      else if (a >= 0xD000 && a < 0xE000) cart_.wramdata(1)[a - 0xD000] = v;
++      else if (a >= 0xC000 && a < 0xD000) cart_.wramdata(0)[a - 0xC000] = v;
++      else if (a >= 0xA000 && a < 0xC000) cart_.wsrambankptr()[a] = v;
++      else if (a >= 0x8000 && a < 0xA000) cart_.vrambankptr()[a] = v;
++   }
++   const unsigned char *cgbpal(int obj) const { return lcd_.cgbpal(obj); }
++   bool oamDmaActive() const { return lastOamDmaUpdate_ != disabled_time; }
++   /* Dual: NO SLOWDOWN runs at normal speed while OAM DMA or an HBlank DMA is in progress (games time both). */
++   bool dmaActive() const { return lastOamDmaUpdate_ != disabled_time || lcd_.hdmaIsEnabled(); }
++   void dualUnhalt() { if (intreq_.halted()) intreq_.unhalt(); }
++   unsigned rombank() const { return (unsigned)((cart_.romdata(1) - cart_.romdata(0)) / 0x4000 + 1); }
++   unsigned char *vram_base() const { return cart_.vramdata(); }
+ #else
+    void loadSavedata() { cart_.loadSavedata(); }
+    void saveSavedata() { cart_.saveSavedata(); }
+diff --git a/libgambatte/src/gambatte.cpp b/libgambatte/src/gambatte.cpp
+index 5e1f952..b9426cc 100644
+--- a/libgambatte/src/gambatte.cpp
++++ b/libgambatte/src/gambatte.cpp
+@@ -22,7 +22,7 @@
+ #include "statesaver.h"
+ #include "initstate.h"
+ #include "bootloader.h"
+-#include <sstream>
++/* Dual: <sstream> not used */
+ #include <cstring>
+ 
+ namespace gambatte {
+@@ -234,6 +234,12 @@ void *GB::zeropage_ptr() const {
+  return p_->cpu.zeropage_ptr();
+ }
+ 
++unsigned GB::peek(unsigned a) const { return p_->cpu.peek(a); }
++void GB::poke(unsigned a, unsigned v) { p_->cpu.poke(a, v); }
++void GB::dualJump(unsigned pc, unsigned sp, unsigned bank) { p_->cpu.dualJump(pc, sp, bank); }
++void GB::dualWrite(unsigned a, unsigned v) { p_->cpu.dualWrite(a, v); }
++const unsigned char *GB::cgbpal(int obj) const { return p_->cpu.cgbpal(obj); }
++
+ void *GB::oamram_ptr() const {
+  return p_->cpu.oamram_ptr();
+ }
+diff --git a/libgambatte/src/mem/cartridge_libretro.cpp b/libgambatte/src/mem/cartridge_libretro.cpp
+index 82075a5..d7c326f 100644
+--- a/libgambatte/src/mem/cartridge_libretro.cpp
++++ b/libgambatte/src/mem/cartridge_libretro.cpp
+@@ -1,7 +1,7 @@
+ #include "cartridge.h"
+ #include "../savestate.h"
+ #include <cstring>
+-#include <fstream>
++/* Dual: <fstream> not used */
+ 
+ #include <libretro.h>
+ 
+diff --git a/libgambatte/src/video.cpp b/libgambatte/src/video.cpp
+index 012d8d1..7cba7e4 100644
+--- a/libgambatte/src/video.cpp
++++ b/libgambatte/src/video.cpp
+@@ -22,6 +22,7 @@
+ #include <algorithm>
+ #include <string>
+ 
++extern "C" { unsigned gbx_pal_drops = 0; }
+ namespace gambatte
+ {
+ 
+@@ -299,6 +300,7 @@ void LCD::doCgbBgColorChange(unsigned index, const unsigned data, const unsigned
+        * its expansion rebuilt. */
+       ppu_.refreshBgPaletteExpansion(index >> 3);
+    }
++   else ++gbx_pal_drops;
+ }
+ 
+ void LCD::doCgbSpColorChange(unsigned index, const unsigned data, const unsigned long cc)
+@@ -308,6 +310,7 @@ void LCD::doCgbSpColorChange(unsigned index, const unsigned data, const unsigned
+       update(cc);
+       doCgbColorChange(objpData_, ppu_.spPalette(), index, data);
+    }
++   else ++gbx_pal_drops;
+ }
+ 
+ bool LCD::oamReadable(const unsigned long cc)
+diff --git a/libgambatte/src/video.h b/libgambatte/src/video.h
+index 0be2ad9..04090cb 100644
+--- a/libgambatte/src/video.h
++++ b/libgambatte/src/video.h
+@@ -152,6 +152,7 @@ class LCD
+       void update(unsigned long cycleCounter);
+ 
+       bool isCgb() const { return ppu_.cgb(); }
++      const unsigned char *cgbpal(int obj) const { return obj ? objpData_ : bgpData_; }
+       bool isDoubleSpeed() const { return ppu_.lyCounter().isDoubleSpeed(); }
+ 
+       void setColorCorrection(bool colorCorrection);
+diff --git a/libgambatte/src/video/ppu.cpp b/libgambatte/src/video/ppu.cpp
+index 9144954..9511a4c 100644
+--- a/libgambatte/src/video/ppu.cpp
++++ b/libgambatte/src/video/ppu.cpp
+@@ -26,6 +26,85 @@ namespace {
+ 
+ using namespace gambatte;
+ 
++/* Dual: NO SPRITE LIMIT. The hardware draws at most 10 sprites per line (the first 10 in OAM order); games that put
++ * more on a line lose the rest, and many rotate OAM so a different set drops each frame (flicker). With gbx_nolimit
++ * set, every line records all its sprites when mode 3 starts, and gbx_draw_overflow() draws the ones past the 10th
++ * into the finished frame: under the line's own sprites (they have lower OAM priority), with CGB BG priority. PPU
++ * timing is untouched, so games behave exactly as before. CGB mode only. */
++extern "C" { int gbx_nolimit = 0; }
++namespace {
++struct GbxLine { unsigned char n, lcdc, scx, scy, wx, win, done, pad; unsigned char oam[40][4]; };
++GbxLine gbxLines[144];
++PPUPriv *gbxPpu = 0;
++
++void gbxRecordLine(PPUPriv const &p, unsigned ly) {
++	if (ly >= 144) return;
++	GbxLine &L = gbxLines[ly];
++	unsigned char const *const oam = p.spriteMapper.oamram();
++	unsigned const h = (p.lcdc & 4) ? 16 : 8, n0 = 0;
++	unsigned n = n0;
++	for (unsigned i = 0; i < 40; ++i) {
++		unsigned const y = oam[i * 4];
++		if (ly + 16 >= y && ly + 16 < y + h) { std::memcpy(L.oam[n], oam + i * 4, 4); ++n; }
++	}
++	L.n = n; L.lcdc = p.lcdc; L.scx = p.scx; L.scy = p.scy; L.wx = p.wx;
++	L.win = (p.lcdc & 0x20) && p.weMaster && p.wx < 167;
++	L.done = 1;
++}
++}
++
++extern "C" void gbx_draw_overflow(video_pixel_t *buf, int pitch) {
++	PPUPriv const *const pp = gbxPpu;
++	if (!gbx_nolimit || !pp || !buf || !pp->cgb || pp->dmgMode) { for (unsigned ly = 0; ly < 144; ++ly) gbxLines[ly].done = 0; return; }
++	PPUPriv const &p = *pp;
++	unsigned char const *const vram = p.vram;
++	unsigned winLine = 0;
++	for (unsigned ly = 0; ly < 144; ++ly) {
++		GbxLine &L = gbxLines[ly];
++		if (!L.done) continue;
++		L.done = 0;
++		unsigned const thisWin = winLine;
++		if (L.win) ++winLine;
++		if (L.n <= 10 || !(L.lcdc & 2)) continue;
++		unsigned const h = (L.lcdc & 4) ? 16 : 8;
++		unsigned char taken[168];                 // 1 = a higher-priority sprite has an opaque pixel here
++		std::memset(taken, 0, sizeof taken);
++		video_pixel_t *const row = buf + ly * pitch;
++		for (unsigned k = 0; k < L.n; ++k) {
++			unsigned char const *const o = L.oam[k];
++			unsigned const attr = o[3];
++			unsigned line = ly + 16 - o[0];
++			if (attr & 0x40) line = h - 1 - line;
++			unsigned tile = h == 16 ? (o[2] & 0xFE) + (line >> 3) : o[2];
++			unsigned char const *const td = vram + (attr & 8 ? 0x2000 : 0) + tile * 16 + (line & 7) * 2;
++			for (unsigned b = 0; b < 8; ++b) {
++				int const x = int(o[1]) - 8 + int(b);
++				if (x < 0 || x >= 160) continue;
++				unsigned const bit = attr & 0x20 ? b : 7 - b;
++				unsigned const c = (td[0] >> bit & 1) | (td[1] >> bit & 1) << 1;
++				if (!c || taken[x]) continue;
++				taken[x] = 1;
++				if (k < 10) continue;             // the hardware drew this one
++				// BG / window pixel under it, for priority
++				unsigned map, tx, ty, py, px;
++				if (L.win && x >= int(L.wx) - 7) {
++					map = L.lcdc & 0x40 ? 0x1C00 : 0x1800; px = x - (int(L.wx) - 7); py = thisWin;
++				} else {
++					map = L.lcdc & 0x08 ? 0x1C00 : 0x1800; px = (x + L.scx) & 0xFF; py = (ly + L.scy) & 0xFF;
++				}
++				tx = px >> 3; ty = py >> 3;
++				unsigned const tno = vram[map + ty * 32 + tx], battr = vram[0x2000 + map + ty * 32 + tx];
++				unsigned const brow = battr & 0x40 ? 7 - (py & 7) : py & 7;
++				unsigned const baddr = (battr & 8 ? 0x2000 : 0) + (L.lcdc & 0x10 ? tno * 16 : 0x1000 + int(static_cast<signed char>(tno)) * 16) + brow * 2;
++				unsigned const bbit = battr & 0x20 ? (px & 7) : 7 - (px & 7);
++				unsigned const bc = (vram[baddr] >> bbit & 1) | (vram[baddr + 1] >> bbit & 1) << 1;
++				if (bc && (L.lcdc & 1) && ((attr | battr) & 0x80)) continue;
++				row[x] = p.spPalette[(attr & 7) * 4 + c];
++			}
++		}
++	}
++}
++
+ #define PREP(u8) (((u8) << 7 & 0x80) | ((u8) << 5 & 0x40) | ((u8) << 3 & 0x20) | ((u8) << 1 & 0x10) \
+                 | ((u8) >> 1 & 0x08) | ((u8) >> 3 & 0x04) | ((u8) >> 5 & 0x02) | ((u8) >> 7 & 0x01))
+ 
+@@ -238,6 +317,7 @@ namespace M3Start {
+ 
+ 			p.spriteList[numSprites].spx = 0xFF;
+ 			p.nextSprite = 0;
++			if (gbx_nolimit) gbxRecordLine(p, ly);
+ 		}
+ 
+ 		p.xpos = 0;
+@@ -1484,6 +1564,7 @@ PPUPriv::PPUPriv(NextM0Time &nextM0Time, unsigned char const *const oamram, unsi
+ , dmgMode(false)
+ , weMaster(false)
+ {
++	if (!gbxPpu) gbxPpu = this;
+ 	std::memset(spriteList, 0, sizeof spriteList);
+ 	std::memset(spwordList, 0, sizeof spwordList);
+ 	/* The expansion will be properly filled by LCD::refreshPalettes()
