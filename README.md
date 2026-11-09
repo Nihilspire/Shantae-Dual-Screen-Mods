@@ -47,7 +47,7 @@ Game on the top screen, Link screen below, as on a dual-screen handheld. Rendere
 </p>
 
 ## AI-assisted?
-Feel free to skip over if you feel strongly about it. Claude's `Opus 5.5` was used for ram mapping and initial coding and `[CODE REVIEW MODEL?]` was used for code review. Code is open-source, feel free to use as a base and human it up.
+Feel free to skip over if you feel strongly about it. Claude's `Opus 5.5` was used for ram mapping and initial coding and `Qwen-3-Coding` was used for code review. Code is open-source, feel free to use as a base and human it up.
 
 ## Downloads
 See [Releases](../../releases). What changed in each version: [CHANGELOG.md](CHANGELOG.md) (Android),
