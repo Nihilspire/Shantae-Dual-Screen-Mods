@@ -117,7 +117,9 @@ typedef struct {
     Obj obj[MAXOBJ]; int nobj;
     long stamp;
 } Pic;
+#ifndef NPIC                                                    /* the VC plugin (vcplugin/) keeps 2: 5 MB of memory */
 #define NPIC 6
+#endif
 static Pic pics[NPIC], *cur;
 static char status[32] = "WAITING FOR THE GAME";
 const char *map_status(void) { return status; }
@@ -221,6 +223,7 @@ static void startPic(Pic *p, const Vars *v, int x, int y, int w, int h) {
     memset(p->idx, 255, (size_t)p->W * p->H);
     p->row = y & ~15; p->lcdc = pk(0xFF40);
     if (!mtPool) mtPool = malloc(MTN * 256);
+    if (!mtPool) { free(p->idx); p->idx = NULL; p->used = 0; return; }
     memset(mtKey, 0, sizeof mtKey); mtUsed = 0; mtOwner = p; memset(tileUsed, 0, sizeof tileUsed);
     roomObjects(p, v);
     snprintf(status, sizeof status, "READING THE MAP...");
@@ -320,6 +323,9 @@ static void ovCheck(void) {
     free(o->idx); memset(o, 0, sizeof *o);
     long px = (long)w * h; o->sh = px > 16000000 ? 2 : px > 4000000 ? 1 : 0; o->s = 1 << o->sh;
     o->W = (w + o->s - 1) / o->s; o->H = (h + o->s - 1) / o->s;
+#ifdef OV_MAX                                                   /* the VC plugin: the ROOMS card shows outlines past this */
+    if ((long)o->W * o->H > OV_MAX) return;
+#endif
     o->idx = malloc((size_t)o->W * o->H);
     if (!o->idx) return;
     memset(o->idx, 255, (size_t)o->W * o->H);

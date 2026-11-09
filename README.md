@@ -1,219 +1,170 @@
-# Shantae Dual 0.34
+# Shantae Dual
 
-One APK: Shantae (USA) for Game Boy Color on one screen, a Shantae-styled Link screen on the other.
-Built from Metroid Dual 0.45; the NES core is swapped for Game Boy Color and the rest keeps the same structure.
+Shantae (GBC) on two screens: the game on one, a **Shantae Link** companion screen on the other. It shows a live map
+of the room drawn from the game's own level data, Shantae's items (tap one to equip it), every dance with auto dance,
+a bestiary, progress with story hints, the day and night clock, and save state shortcuts. On a wide screen, **WIDE
+VIEW** shows the level beyond the Game Boy's edges. It runs as an Android app (dual-screen handhelds, Surface Duo, a
+second display, split screen, or one screen with a slide-in Link panel) and on the New 3DS and New 2DS. There's also
+**Shantae Link**, the companion screen on its own, for playing in RetroArch if you want to keep RetroAchievements
+support.
 
-- **Emulator:** libretro-gambatte (GPLv2, github.com/libretro/gambatte-libretro @ 77f2567) with `native/gambatte-dual.patch`
-  (side-effect-free peek/poke, CGB palette access, the NO SLOWDOWN overclock, a host-only write/opcode tracer,
-  no iostream includes). Statically linked into `libshantaedual.so` with a small frontend (`native/gbcore.c`),
-  glue (`native/gbglue.cpp`, which compiles the core's libretro.cpp), the JNI layer (`native/gbjni.c`) and
-  `native/cxxrt.c` (operator new/delete etc.), so the .so needs only libc/libm/libdl/liblog. libc++ is used headers-only.
-- **Host:** `app/src` (Java, no AndroidX). Game view (160x144, 10:9) with game-themed 16:9 borders, touch pad,
-  controller + rebinding, 4 save slots with screenshots + quick save/load + auto state, launcher/pause menu
-  (`assets/menu`), Link page (`assets/link`).
-- **Nothing from the game ships in the APK.** You choose your ROM on first launch (CRC32 `E994B59B` expected).
-  The font, text-box frames and signposts come from that ROM; the border tiles from the running game's VRAM; the Link
-  page's item/stone/talisman icons are copied from VRAM the first time you open the in-game inventory.
-- **0.2 (removed in 0.28): menus made from the game itself.** On first start (and after changing ROM, GBA MODE or COLORS) the app plays
-  the game's opening once with no one watching (`native/extract.c`, a few seconds, hearts fill up on screen) and keeps
-  five screen snapshots plus the title theme in the app's private storage (`files/gameassets`):
+**No game files are included.** You supply your own *Shantae (USA)* ROM (CRC32 `E994B59B`). The font, frames, item
+icons, Shantae's picture and the enemy pictures are read from it at runtime, the title theme is recorded from it on
+first start, and the maps come from the running game.
 
-  | Snapshot | Used for |
-  |---|---|
-  | Title screen | Launcher art; its "Press Start" banner, cut into caps and a filler, frames the chosen item |
-  | File Select | The blue swirl background |
-  | Dance Menu | The `<B` header bar (tap = back), the framed black rows, the dance icons on the pause menu |
-  | Inventory | Item, stone, talisman, squid and firefly icons (the Link page no longer needs the in-game menu opened) |
-  | Status bar | Kept for later (not drawn yet) |
-  | Title music (WAV) | SOUND > MENU MUSIC: TITLE THEME (launcher only, 2 s gap between plays), or the 0.1 synth tune |
+## WIDE VIEW (Shantae Dual only)
+The headline feature. On a screen wider than the Game Boy's, Shantae Dual draws the world around the real 160 x 144
+picture: the level, enemies, rocks, blocks and gates, all live, so you see what's coming instead of running into it.
+Towns wrap all the way round, and rooms stop at their real edges. The game's own picture stays exact in the middle;
+the rest is built every frame from the ROM's level data, the live tiles and colours, and the sprites the game is
+drawing. The game's spawn window is widened to match, so enemies are alive before they reach the old screen edge.
 
-  The route (power on, wait out the intro, the title's debug code, "Start Debug Game", open the inventory and the
-  Dance Menu) is checked at each step by RAM/VRAM fingerprints; if anything doesn't match, the menus keep the 0.1 look.
-  It never touches your save. Menus are drawn at Game Boy scale (144 lines landscape, 160 columns portrait) in the
-  game's own colours (GBA mode and colour correction included). SYSTEM > MENU STYLE switches back to the 0.1 look;
-  REBUILD MENU ART runs the extraction again.
-- **0.2: battery saves persist.** The game's own save (SRAM) is loaded from `files/shantae.srm` at start and written
-  when it changes (checked every 10 s), on pause, quit and exit. 0.1 kept only save states.
+- **Shantae Dual on Android:** up to 64 Game Boy pixels each side, 57 on a 16:9 screen. Settings > DISPLAY > WIDE
+  VIEW, on by default.
+- **Shantae Dual 3DS:** the whole 400-pixel top screen, on the New 3DS and New 2DS (SETTINGS > SYSTEM > WIDE VIEW).
+- **Not in Shantae Link:** RetroArch draws its own picture, so the companion can't widen it.
 
-## Screens
-| Setup | What happens |
+<p>
+<img src="docs/screenshots/wide-view-on-off.webp" width="32%" alt="WIDE VIEW on and off">
+<img src="docs/screenshots/wide-view-dual-screen.webp" width="32%" alt="WIDE VIEW with the Link screen">
+<img src="docs/screenshots/wide-view-3ds.png" width="32%" alt="WIDE VIEW on the 3DS top screen">
+</p>
+
+## Screenshots
+Game on the top screen, Link screen below, as on a dual-screen handheld. Rendered from the desktop test build.
+
+<p>
+<img src="docs/screenshots/shantae-tab.png" width="24%" alt="Shantae tab">
+<img src="docs/screenshots/dance-list.png" width="24%" alt="Dance list with auto dance">
+<img src="docs/screenshots/map-mount-pointy.png" width="24%" alt="Map, Mount Pointy">
+<img src="docs/screenshots/map-zombie-swamp.png" width="24%" alt="Map, Zombie Swamp">
+</p>
+<p>
+<img src="docs/screenshots/map-golem-mine.png" width="24%" alt="Map, Golem Mine">
+<img src="docs/screenshots/signposts.png" width="24%" alt="Signposts card">
+<img src="docs/screenshots/progress-hints.png" width="24%" alt="Progress and story hints">
+<img src="docs/screenshots/ending-card.png" width="24%" alt="Ending card">
+</p>
+
+## AI-assisted?
+Feel free to skip over if you feel strongly about it. Claude's `Opus 5.5` was used for ram mapping and initial coding and `[CODE REVIEW MODEL?]` was used for code review. Code is open-source, feel free to use as a base and human it up.
+
+## Downloads
+See [Releases](../../releases). What changed in each version: [CHANGELOG.md](CHANGELOG.md) (Android),
+[linkapp/README.md](linkapp/README.md) (Shantae Link) and [native/ctr/README.md](native/ctr/README.md) (3DS).
+
+| File | What it is |
 |---|---|
-| Surface Duo, app spanned | Game on one screen, Link on the other, split at the hinge. |
-| Device with a second display | Link goes to the second display as a Presentation. |
-| One screen | Game with borders themed from the area's own tiles (per area and day/night). Hearts, gems, lives and the day/night clock in the borders. Link via Pause > LINK SCREEN or Settings > LINK SIDE PANEL. |
-| Anything else | Settings > SCREENS > SPLIT: SIDE BY SIDE / TOP + BOTTOM (+ HINGE GAP), SWAP SCREENS. |
+| `Shantae.Dual.<ver>.apk` | Android: emulator + Link screen in one app, with WIDE VIEW |
+| `Shantae.Link.<ver>.apk` | Android: Link screen only, reading Shantae running in RetroArch (Gambatte or mGBA core). Works with RetroAchievements (in hardcore mode RetroArch refuses its save state buttons). |
+| `Shantae.Dual.3DS.<ver>.cia` | New 3DS / New 2DS: install with FBI |
+| `Shantae.Dual.3DS.<ver>.3dsx` | New 3DS / New 2DS: for the Homebrew Launcher (`SD:/3ds/`) |
 
-## Controls
-Touch pad (AUTO/ON/OFF, opacity), controllers with rebinding (Settings > CONTROLS > CONTROLLER BUTTONS).
-**SELECT+START** or Back opens the pause menu. MENU, FAST, SAVE, LOAD, TURBO A/B can be bound.
+## Features
+- **WIDE VIEW** (Shantae Dual only): the level beyond the Game Boy's edges on wide screens, see above.
+- **Link screen:**
+  - Live room map from the game's own level data: Shantae's position, heart holders, fireflies, squids and talismans
+    (grey once collected). Zoom x1 / x2 / whole region, and drag around.
+  - Map cards: where the room leads, a town's doors with their names, what's still to collect here, every room of a
+    cave or labyrinth, and the signposts in order.
+  - Shantae tab: hearts, gems, time to dusk or dawn, and all 12 items with counts. Tap an item to equip it without
+    opening the game's menu. Shantae is drawn in her Fighter's Gear, with pieces you haven't bought shown faint.
+  - Dance list: pops up when you press Select, with every dance's inputs. **Auto dance** (Shantae Dual): tap a learned
+    dance and the app performs it on the beat, every transformation, Healing and all five Warps.
+  - Bestiary: 46 enemies light up the first time you meet them, pictured in the colours of the area you met them in.
+    Unmet ones tell you where to look.
+  - Progress and story hints: a completion checklist, your place in the story with a hidden hint for the next step,
+    and play stats.
+  - Day and night: a countdown to dusk or dawn, and a night card (double enemy health, fireflies come out, the Zombie
+    Caravan only at night).
+  - Boss bars for Risky Boots and the Tinker ship, and an ending card with your run's stats to sign with your finger.
+- **Save states:** 4 slots with screenshots (3 on the 3DS), plus quick save/load, an auto state on exit, and the
+  game's own battery save.
+- **Screens:**
+  - Surface Duo hinge, a second display, split screen (side by side / top and bottom with a hinge gap, swappable),
+    or one screen with a side panel.
+  - **Single screen:** the game fills the screen and an arrow on its edge (or the LINK PANEL button) slides the Link
+    screen in over it.
+  - 16:9 borders themed from the area's own tiles, changing with day and night, with hearts, gems, lives and the
+    clock in them (when WIDE VIEW isn't filling the sides).
+- **Controls:** Touch pad support and controller support with rebinding, turbo and fast-forward (also a button on the
+  Link screen). Default hotkeys: R1 fast-forward, L1 Link panel, L2 / R2 quick save / load, X / Y turbo B / A.
+- **NO SLOWDOWN:** the emulator's overclock (memory accesses at half their cycles), on by default.
+- **ALL SPRITES:** draws sprites past the Game Boy's 10 per line, so the Risky Boots fights don't flicker.
+- **GBA MODE:** the game's own "GBA ENHANCED" colours and the Tinkerbat transformation.
+- **Built from your ROM:** the launcher, pause menu and Link screen use the game's font and frames, and the launcher
+  plays the title theme recorded on first start.
+- **Experimental 3D view:** level rooms rebuilt in 3D from the live tile map, with ramps, cut-out cards and six
+  cameras.
+- **Playtest codes:** hidden behind the Konami code on the launcher, off by default, with a room warp to any of the
+  game's 68 places.
+- **New 3DS / New 2DS:** the same core, Link screen and menus, written in C: the game on the top screen, Link on the
+  touch screen, WIDE VIEW across the top screen. Most of the above, but not the 3D view or the Android screen
+  layouts; frame skip for an old 3DS (WIDE VIEW needs a New 3DS). See [native/ctr/README.md](native/ctr/README.md).
+- **Shantae Link (RetroArch):** the Link screen for Shantae running in RetroArch on the same device, over RetroArch's
+  network commands: equip items, open RetroArch's menu, fast-forward, and save or load RetroArch's state slots. Not
+  in it: WIDE VIEW and auto dance, which need the emulator. See [linkapp/README.md](linkapp/README.md).
 
-## Settings
-DISPLAY (shape, integer scale, colours GBC LCD / VIVID, frame blend, borders, FPS), SCREENS, CONTROLS, SOUND,
-GAMEPLAY (NO SLOWDOWN, GBA MODE), SYSTEM (change ROM, skip launcher, menu style, rebuild menu art, version). The Konami code on the launcher shows
-or hides PLAYTEST CODES (infinite hearts/gems, all items, all dances, +heart, squids, lives, and 0.10's ROOM WARP: pick
-any of the 68 places the game itself can start at, grouped as towns, overworld, labyrinths, caves and story scenes;
-the game loads it like resuming a save there, your save and items untouched; and 0.11's 3D VIEW: level rooms drawn in
-3D on the main screen, solid ground as blocks, crates and ledges as boxes, scenery on a back wall, sprites on a plane in
-front and the status bar flat at the bottom. 3D CAMERA picks FLAT, TILT, LOW, SIDE, HIGH ANGLE, CLOSE (follows Shantae)
-or CYCLE ALL; tapping the picture also steps through them when the touch pad is hidden. Anything that isn't a level
-room (menus, maps, the title, fades) shows the normal 2D picture).
+## Source layout
+| Path | |
+|---|---|
+| `app/` | Android app (Java, no AndroidX). `assets/menu` = launcher/pause menu, `assets/link` = Link screen (HTML/JS), `assets/view3d` = 3D view |
+| `native/` | gambatte frontend (`gbcore.c`), WIDE VIEW (`wide.c`), JNI layer, first-start capture (`extract.c`), desktop test driver (`drive.c`), `gambatte-dual.patch`. `ctr/` = the New 3DS port (libctru, C) |
+| `linkapp/` | Shantae Link for Android (WebView + RetroArch network commands) |
+| `tools/` | build scripts, toolchain setup, JNI and log headers, reverse-engineering scripts (`tools/re`) |
+| `tests/` | driver, page, menu, WIDE VIEW, 3D view, dance and RetroArch tests, and the release pictures (they need your ROM and local dumps; not included) |
+| `docs/` | porting notes, screenshots |
+| `out/` | `android/libshantaedual.so`, prebuilt, so the APK builds without rebuilding the core; `libcxx/` config headers |
 
-- **NO SLOWDOWN** (on by default): memory accesses cost 2 cycles instead of 4, so the CPU runs twice as fast relative
-  to video, sound and timers. OAM DMA keeps normal speed (games time it with a cycle-counted wait loop in HRAM).
-  0.18: HBlank DMA keeps normal speed too. Shantae streams next frame's sprite tiles with an HBlank DMA (FF55 bit 7,
-  ~80 lines) started in vblank; at double speed the main loop reached its next DMA before that one finished, so half-
-  written tiles showed as white/garbled patches (file select, cutscenes, big sprites). No dropped VRAM or palette
-  writes were involved (`drive`: `drops` prints both counters). Still about twice as many frames with input in the
-  heaviest spot tested (317 vs 160 of 600).
-- **ALL SPRITES** (0.17, on by default): the GBC draws at most 10 sprites per line (the first 10 in OAM order).
-  Busy scenes in Shantae (the Risky Boots fights: cannonballs, Tinkerbats, Risky) put up to 15 on a line, so pieces
-  vanish on alternate frames. With this on, gambatte-dual.patch records every line's sprites when mode 3 starts and
-  `gbx_draw_overflow()` draws the ones past the 10th into the finished frame (under the line's own sprites, with CGB
-  BG priority) before frame blending. PPU timing is untouched, so the game runs identically either way (checked in
-  the driver: same frames, only the extra sprite pixels differ). `drive`: `opt dual_sprite_limit off|on`.
-- **FRAME BLEND** (OFF by default; 0.16 briefly made MIX the default): Shantae double-buffers sprite tiles (OAM points
-  at VRAM bank 1 on one frame, bank 0 on the next), but every frame is complete, so blending isn't needed and MIX
-  only adds ghosting during screen shake.
-- **GBA MODE** (on by default, applies after RESET or a new start): Gambatte's GBA hardware mode, the game's own
-  "GBA ENHANCED" mode: brighter colours and the Tinkerbat transformation.
-
-## Link screen (from RAM, see SHANTAE-RAM.md)
-- 0.34: the DANCES pop-up says "TAP TO AUTOMATICALLY PERFORM:" (two lines where it doesn't fit).
-- 0.33: auto dance: tap a learned dance in the DANCES pop-up (Select or the note button) and the app dances it: Select, then each input on the beat (frame 18 + 64k after Select, played on the game's own frames through N.input, so fast-forward keeps time). Shantae Dual only; tests/dancetest.py taps every row and plays the result on the driver.
-- 0.32: Shantae is back on the SHANTAE tab (gone since 0.28), built from the ROM: the inventory's left panel (BG map 7A:7C72) and her sprite cels in bank 7B (body, face, hair, and each Fighter's Gear piece, faint until bought; OBJ palettes 7B:427A).
-- 0.31: the item, stone, talisman, squid and firefly icons are built from your ROM at start (the inventory screen's LZSS tilesets 7A:6515 / 7A:7113 and its BG palettes at 7A:7C30), so they are all there from the first boot, unowned ones faded. No more opening the game menu once for icons; OPTIONS > FORGET ICONS is gone.
-- 0.30: PROGRESS > MONSTERS is back: 46 enemies (names checked by the user), each lit up the first time it's on
-  screen. Pictures are decoded on the page from your ROM (one sprite cel per enemy), in the colours of the area where
-  you met it (the game's palette copy at $C400, saved when met; a night copy is replaced by a day one later). Unmet
-  entries show where to find them. MONSTERS MET is back on the ending card. Nothing is captured on first start, so the
-  extraction is unchanged. Works in Shantae Link (RetroArch) too, once rebuilt.
-- 0.29: item icons on the SHANTAE tab are only copied from the inventory screen once its colours have settled
-  (bright, and the same as at the page's last look). 0.28 could copy them while the screen faded in and keep them
-  black. Icons are kept under a new key, so they're copied once more the next time the inventory is opened.
-  `tests/icontest.py` plays the fade and checks every stored icon is a real frame of the open inventory.
-- 0.28: the game-styled menus are gone. The launcher, pause menu and Link page all use the plain look (as Shantae
-  Link does); SYSTEM > MENU STYLE and Shantae drawn in her gear on the SHANTAE tab went with them. First start only
-  records the title theme now (about half the time; SYSTEM > RECORD TITLE MUSIC redoes it); updating re-records it once
-  and deletes the old menu snapshots. Item icons still come from the in-game inventory screen the first time it's open.
-- 0.27: the bestiary is gone (PROGRESS > MONSTERS, its first-start capture, "monsters met" on the ending card): too
-  many monsters were missing or badly pictured in playtesting. First start is quicker (the extraction stops after the
-  menus); an existing beasts.bin and the stored pictures (localStorage `sd.mon1`) are deleted. The research stays in
-  SHANTAE-RAM.md ("Monsters", "Bestiary capture") and the code in git history (0.26).
-- PROGRESS (0.20, was 100%): ITEMS (the old checklist), STORY (the next step from the stones and transformation dances
-  she has, hidden until tapped), STATS (play time from the game's frame counter $C377 in play, gems earned/spent, items
-  used, hearts lost, times down, dances, nights; counted on this device, a counter jump = a load and isn't counted;
-  RESET with a second tap).
-- Boss bars (0.20): Risky's ship fight (map $03): Tinker ship HP = node $D276 +$64 ($D2DA, 10 by day), Risky = node
-  $D0FC +$63 ($D15F, shown once it drops below 64). Shown only while the node runs the boss's script (bank $1A).
-- Night notes (0.20): a moon button on the map opens a card: time to dusk/dawn, double enemy health at night,
-  fireflies here (dim on the map by day), the Zombie Caravan only at night.
-- 0.26: FF button at the bottom right of the Link screen's tab bar (as in Xenogears Dual): tap toggles the emulator's
-  fast-forward (about 3x, sound off), gold while on. The FAST key still works while held. `LinkBridge.ff(mode)`:
-  -1 reads, 0 off, 1 on, 2 toggles. Hand-off notes for continuing in Claude Code: CLAUDE.md.
-- 0.25: adaptive launcher icon (res/mipmap-anydpi-v26: night-purple background with sparkles to the edges, the two
-  screens as the foreground inside the safe zone; made from the pixel-art icon by tools/icon/adaptive.py, older
-  Android keeps ic_launcher.png). The map's TO COLLECT HERE card says fireflies are night only (out now / in m:ss).
-  The signpost list scrolls by dragging (pixel offset, position bar) instead of paging on a tap.
-- 0.24: the night card opens from the map title's timer ("DUSK IN 1:59" / "DAWN IN …" after a sun or moon); the moon
-  side button is gone. Monster names: Clump and Scarecrow were swapped, and so were Spider and Bat.
-- Bestiary pictures (0.24, removed in 0.27): first-start extraction (native/extract.c, GBX_BEASTS → beasts.bin) captures every monster
-  once in daylight: from one saved moment of the debug game, warp to the area (day time poked first), put Shantae at a
-  planned spot, remove every other object (some enemies keep them: drawn by a helper object), watch 75 x 4 frames and
-  keep the frame where the enemy shows the most sprites. The table (map id, Shantae x/y, the enemy type's script range)
-  is native/beasts.h, made by tools/re/beast_plan.py with the driver's `beast` command (the same C code) from the
-  extraction's own state (`exbase`). monsters.js cuts the picture by tools/re/beastcut.py's rule. 32 of 35 entries are
-  captured; Snake, Giant Snail and one Cackle Mound creature never show in a capture and still get a live picture
-  when met. ASSET_VERSION 2 re-runs the extraction once. tools/re/beast_sheet.py draws the pictures with their names.
-- Map fix (0.23): a new game starts at Shantae's lighthouse (map $00), whose region (51:4F) also holds Risky's ship fight
-  and the credits. The map used the lighthouse's 3072x1008 room header as a "bigger room" and drew the other scenes'
-  level data with the lighthouse's tiles under it (a second lighthouse, blank blocks). Regions listed in world.js
-  `ALONE` now show only the room she's in, and the lighthouse and the ship are named. The dance list counts 11 dances
-  once Tinkerbat is learned outside GBA mode (was "11 OF 10").
-- Ending card (0.22, as Metroid Dual's mission report): while the credits roll and on THE END after them (node 0/1
-  script PC in bank $1C at $7040 or above; the ending's talk before them runs in bank $16) the whole Link screen shows
-  QUEST COMPLETE: the real date and time, play time (the Link's own count, see STATS), completion %, the six
-  collection counts, times down, DEV CODES USED if any were, and a signature field you draw your name in
-  with a finger (CLEAR / SAVE). SAVE keeps the run with the signature as a small PNG in localStorage `sd.hall` (last 20;
-  nothing shows the list yet). The game itself saves nothing at the end (SHANTAE-RAM.md, "Defeat and ending").
-- SHANTAE (0.9: STATUS and ITEMS in one tab; the left panel in wide landscape): quarter-accurate hearts and gems,
-  time to dusk/dawn, the 12 items as icons with counts (tap one to equip it; the equipped one is named with what it
-  does), stones and talismans in one row, Fighter's Gear, and squids still to hand in. Lives, the equipped-item block
-  and the collectible counts (all on the 100% tab) were dropped. 0.16: once the game's menu has been opened (the
-  icon kit), the tab draws Shantae as the inventory screen does (BG region cols 1-9, rows 1-17 plus her sprites), with
-  each Fighter's Gear piece drawn on her where it goes (the inventory sprites after the first 9 non-skin ones, sorted
-  by position: tiara top, boots bottom, cuff left, sash middle) and missing pieces faint; items, stones, talismans,
-  squids and fireflies use the game's own icons beside her. Without the kit it falls back to the plain layout.
-- DANCES (0.15: no longer a tab): pressing Select in play (which starts a dance) pops the list up over the pane: every
-  dance with its inputs, learned ones lit (Tinkerbat shown in GBA mode). It closes when Shantae moves (the dance ended,
-  she transformed or warped), after 20 s, or on a tap; the note button beside the gear opens it by hand.
-- MAP (0.3): the whole room you're in, drawn from the game's level data in your ROM with the tiles and colours in
-  VRAM (so day/night and GBA colours match), unexplored parts included. Long rooms show as one strip that follows the
-  game camera, with a gold bar under it for where you are in the room (0.8; 0.3-0.7 folded them into rows).
-  A blinking dot is Shantae, a box is what the game screen shows. In places made of several rooms (labyrinths) ALL
-  ROOMS HERE shows every room of the region on its grid with the current one lit. SIGNPOSTS switches to the 0.1 list
-  (the game's own signposts: every area with its West and East neighbours). Before drawing, the map checks the level
-  data against the BG map under the camera, so it waits rather than drawing with the wrong tiles. Format: SHANTAE-RAM.md.
-  0.4: heart holders, fireflies, baby squids and talismans in the room are marked (grey once collected, from the
-  game's own flags) and counted under the map. 0.5: the area's name, where its edges, doors and caves lead (cave
-  mouths and ladders are numbered on the map), from `assets/link/world.js` (SHANTAE-RAM.md, "Areas and links").
-  0.6: towns. On a town street the map is the whole street (it wraps) with each door numbered, the door Shantae is
-  standing at lit, and a DOORS list with every door's name (read from your ROM) and the gates in teal. Inside a
-  building the title is the town and building, and the same list shows which door you came through
-  (SHANTAE-RAM.md, "Towns").
-  0.7: labyrinths. The map marks where you came in (EXIT, with where it leads under the map) and the Guardian Genie
-  (G); Dribble Fountain is drawn from its own region (0.5 had mixed it up with Risky's island hideout), so its five baby
-  squids now show too. 100%: squids are counted from the game's own pick-up flags, per labyrinth
-  (SHANTAE-RAM.md, "Labyrinths").
-  0.8: the map polls every tick (was every other), draws a big room's screens around the camera first and the rest on
-  the next poll, copies whole metatiles instead of single pixels, only redraws for day/night when the colours really
-  changed, keeps itself up to date on the other tabs, and does the one-time ROM scan in small steps instead of before
-  the first map. The opening stage is named (Scuttle Town). `tests/linktest.py --time` prints update and render times.
-  0.9: tap the map to zoom x2, x4 and back (it keeps following the camera; a tag shows the zoom). Zoomed in, heart
-  holders, fireflies, squids and talismans are drawn with the game's own inventory icons (16 px, faded once
-  collected). The zoom level is remembered.
-  0.14: the map's title is followed by the time to dusk/dawn; ALL ROOMS HERE draws only the rooms (the space between
-  them stays black). OPTIONS moved off the tab bar to a gear at the top right of the panel (tap it again to go back).
-  0.13: a picture is only drawn and kept once VRAM really holds the room's graphics: each picture records a hash of
-  every 8x8 tile it used; it's drawn from settled colours (not a fade, not the all-white flash of a respawn), kept when
-  those tiles are the same in the next poll and not blank, and redrawn when most of them stop matching. 0.12 could draw
-  and store a room while it was loading (a flat-coloured map after respawning, garbage around cutscenes). Old pictures
-  are discarded. Zoom: x1, x2 and ALL (x4 removed); ALL is at the x1 scale and stays wherever you drag it; x1 and x2 can
-  be dragged too and drift back to the camera after a few seconds. The side buttons are bigger (34 px, 2x icons).
-  0.12: maps are kept. Each room is drawn once into palette bytes and coloured from them, so fades, day/night and
-  GBA colours are a quick recolour (0.11 only rechecked colours every 4 s, so a new room sat dark for seconds). The
-  bytes are stored per room (gzipped in IndexedDB, or localStorage where the WebView has no IndexedDB): a room you've
-  been in appears the moment you enter it, in the colours it had last time, even after a restart; entering a region
-  also draws its other rooms in the background. The snapshot the map reads is now 6 times a second (was 3), and the
-  VRAM check uses the snapshot's own scroll, so it no longer fails while walking. Layout: the map fills the pane (named
-  after the place); tap cycles the zoom (0.13: x1, x2, ALL). Details moved to pop-up cards from buttons down the map's left edge
-  (as in Xenogears Link): where the place leads, the town's doors, what's here to collect, all rooms of a labyrinth,
-  and signposts. Tap a card to close it. `tests/maptime.py dir` replays a run of dumps the way the app feeds the map
-  and prints what it shows each tick (`--passes 2` = again after a reload, `--no-idb` = the localStorage path).
-  0.11: the blinking dot is on Shantae (it sat about 26 px left of and 40 px above her: $CB43/$CB45 aren't her
-  sprite's middle; SHANTAE-RAM.md, "Level data").
-- 100%: completion and per-category counts with location hints, paged.
-- OPTIONS (0.14: the gear at the panel's top right): save slots (shared with the pause menu), pause (and forget icons, 0.1 look only).
-- With the extracted pieces the Link page uses the Dance Menu's bars and framed panels on the blue swirl.
-
-## Build
+## Building
+Android (no NDK needed; see `tools/setup_toolchain.sh`):
 ```
-bash tools/setup_toolchain.sh      # bionic headers + stub libs + compiler-rt + libc++ headers; clones gambatte, applies the patch
-ANDROID_JAR=... bash tools/build_apk.sh   # -> out/Shantae Dual <ver>.apk
+bash tools/setup_toolchain.sh      # bionic headers, stub libs, compiler-rt, libc++ 18.1.8 headers, gambatte @ 77f2567 + patch
+bash tools/build_apk.sh            # -> out/Shantae Dual <ver>.apk
+bash tools/build_link_apk.sh       # -> out/Shantae Link <ver>.apk (no native code)
 ```
-apt: clang lld llvm aapt zipalign apksigner dalvik-exchange openjdk-17-jdk-headless. android.jar API 33
-(github.com/Sable/android-platforms, android-33). Keystore: `tools/shantaedual.keystore`, its password in `tools/shantaedual.keystore.pass` (neither is in git; a build without them makes a new key, which can't update an APK signed with the old one).
-`out/libcxx/include` holds the two generated libc++ config headers (`__config_site`, `__assertion_handler`).
+Needs clang, lld, llvm, git, python3, aapt, zipalign, apksigner, dalvik-exchange and openjdk-17, and android.jar
+(API 33, from github.com/Sable/android-platforms) at `~/src/platforms/android-33/android.jar` or in `ANDROID_JAR`.
+The signing keystores are not in the repo: `build_apk.sh` creates a new one with a random password if
+`tools/shantaedual.keystore` is missing (`build_link_apk.sh` the same for `tools/shantaelink.keystore`), with the
+password in a `.pass` file beside it. Builds signed with a different key can't update an installed copy.
 
-## Test
-- `make -C native TARGET=host GAMBATTE=... host` -> `out/host/drive rom script` (run/tap/shot/dump/save/load/peek/poke,
-  `oc 0|1`, `opt key value`, `trace lo hi max file` (writes with PC, bank, HL, stack), `pctrace file max` (every opcode),
-  `trace` lines end with `svbk=` (the WRAM bank at the time of the write),
-  `extract dir` (the first-start extraction; `GBHW=GBA|GBC` env picks the hardware mode), `sramsave/sramload path`).
-- `tests/menutest.py`, `tests/linktest.py`: render the pages in headless Chromium with a mock Host/Native fed from dumps
-  (`linktest.py --kit DIR` adds extracted snapshots, `--ls key=json` presets a stored setting). `tests/menukit.py [GBA|GBC] [outdir]`: the menus with the
-  snapshots from `drive extract` (renders contain game art: for checking only). `linktest.py --standin` draws the
-  MAP tab with placeholder tiles and no ROM font, for sharing. `tests/preview.py`: the same layouts
-  with `tests/standin_kit.js` placeholder pieces and a system font, safe to share.
-- `tests/view3dtest.py out dump...`: the 3D view in headless Chromium (SwiftShader WebGL) fed from driver dumps, one
-  screenshot per dump (`--cam NAME|CYCLE`, `--rep N` feeds each dump N times, `--stats` prints on/off, the slice and
-  per-frame times). Renders contain game art: for checking only.
+New 3DS (devkitPro's 3ds-dev: devkitARM and libctru; and ImageMagick):
+```
+export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
+make -C native/ctr GAMBATTE=$HOME/src/gambatte        # -> out/ctr/Shantae Dual 3DS.3dsx
+bash native/ctr/cia/build_cia.sh                      # -> out/ctr/Shantae Dual 3DS.cia
+```
+`GAMBATTE` is the patched gambatte that `setup_toolchain.sh` checks out. The `.cia` also needs makerom
+(3DSGuy/Project_CTR) and bannertool (carstene1ns/3ds-bannertool).
+
+## Credits and licences
+This project is licensed under the **GNU General Public License v2.0 or later**, except WIDE VIEW's drawing (below).
+If you do use parts of it in your project, please credit me as a "playtester".
+The release builds include:
+- **libretro-gambatte** (GPL-2.0), github.com/libretro/gambatte-libretro, commit `77f2567`, with
+  `native/gambatte-dual.patch` (the NO SLOWDOWN overclock, ALL SPRITES, side-effect-free memory reads, CGB palette
+  access, the hook WIDE VIEW reads the game's draw list through, a write/opcode tracer for desktop builds).
+- **WIDE VIEW's drawing** in `native/wide.c` is adapted from the Shantae recomp's expanded view,
+  github.com/vibecodekun/shantaerecomp, under the **PolyForm Noncommercial License 1.0.0**: Shantae Dual stays
+  noncommercial. Its licence text ships in the Dual APK and beside the 3DS files.
+- **compiler-rt builtins** (Apache-2.0 with LLVM exception), github.com/llvm/llvm-project, unmodified (Dual APK), and
+  **libc++** 18.1.8's headers (same licence), used headers-only.
+- **libctru** (zlib), github.com/devkitPro, unmodified, and **newlib** (BSD-style licences), the C library as built by
+  devkitARM (3DS).
+
+RAM and ROM addresses were found by tracing and poking the running game in the desktop driver (`native/drive.c`).
+The boss health addresses are from TASVideos.
+Shantae is a trademark of WayForward Technologies; Shantae (GBC) © Matt Bozon. This is an unofficial fan project and
+is not affiliated with WayForward or Capcom.
+
+## RAM / ROM used (Shantae USA)
+`C39D` game state (2 playing, 5 dialogue, 0 title and menus), `CBFD` map, `C3E9` time of day (+4 a frame, night from
+`8000`), `CB43` / `CB45` Shantae X / Y, `C9FB` / `C9FD` camera, `CA70` 12 item counts, `CA7D` gems, `CA7F` lives,
+`CA80` / `CA82` hearts / heart containers (4 units each), `CA84` equipped item, `CA8A` / `CA8B` squids / fireflies,
+`CB38` / `CB39` stones / talismans, `CB3A-3B` dances, object nodes in WRAM bank 3 at `D000 + n * 7E` (`+2` script,
+`+34` X, `+37` Y), boss health `w3:D15F` (Risky Boots), `w3:D2DA` (Tinker ship), `w3:D64C` (Golem).
+ROM (file offsets and bank:address): font `0x3964A3` (LZSS), the level data through the room's screen table
+(`C9F9` / `C9FA`), object types `0A:4000`, signpost text `0xA5FE0`, the spawn window `01:506A` (widened by WIDE VIEW),
+the sprite list `00:1DC6` and the scroll commit `00:0A57` (read by WIDE VIEW).
+Everything the apps read, and how each address was found: [SHANTAE-RAM.md](SHANTAE-RAM.md).

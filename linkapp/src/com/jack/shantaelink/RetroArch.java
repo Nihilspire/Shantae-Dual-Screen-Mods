@@ -19,7 +19,21 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class RetroArch implements Runnable {
     static final long KEEP_MS = 2500;      // a block nobody asked for in this long is no longer polled
     static final long FRESH_MS = 3000;     // a cached block older than this counts as missing
-    static final int ROUND_MS = 80;        // pause between rounds
+
+    // Pacing (0.10, as Xenogears Link's light polls): "hot" blocks go out every round, the rest once per fullMs.
+    private volatile int hotMs = 100, fullMs = 200;
+    private volatile java.util.Set<Long> hot = new java.util.HashSet<Long>();
+    private long lastFull;
+    volatile long rounds, reads;           // totals, for the tests
+
+    /** A round every hotMs, and every block (not just the hot ones) once per fullMs. */
+    public void setPace(int hotMs, int fullMs) { this.hotMs = Math.max(20, hotMs); this.fullMs = Math.max(this.hotMs, fullMs); }
+    /** The blocks to read every round: hex start addresses, comma separated. */
+    public void setHot(String csv) {
+        java.util.Set<Long> h = new java.util.HashSet<Long>();
+        for (String a : csv.split(",")) { try { h.add(Long.parseLong(a.trim(), 16)); } catch (NumberFormatException e) { } }
+        hot = h;
+    }
 
     static final class Block {
         final long addr; final int len;
@@ -111,7 +125,7 @@ public final class RetroArch implements Runnable {
         long now = System.currentTimeMillis();
         return "{\"linked\":" + linked() + ",\"state\":\"" + js(state) + "\",\"system\":\"" + js(system) + "\",\"game\":\"" + js(game)
             + "\",\"crc\":\"" + js(crc) + "\",\"version\":\"" + js(version) + "\",\"memErr\":\"" + js(memErr)
-            + "\",\"host\":\"" + js(host) + "\",\"port\":" + port + ",\"sent\":" + sent + ",\"got\":" + got
+            + "\",\"host\":\"" + js(host) + "\",\"port\":" + port + ",\"sent\":" + sent + ",\"got\":" + got + ",\"rounds\":" + rounds + ",\"reads\":" + reads
             + ",\"age\":" + (lastReply == 0 ? -1 : now - lastReply) + "}";
     }
 
@@ -129,8 +143,12 @@ public final class RetroArch implements Runnable {
                 synchronized (outbox) { cmds.addAll(outbox); outbox.clear(); }
                 if (now - lastStatus > 1000) { cmds.add("GET_STATUS"); if (version.isEmpty()) cmds.add("VERSION"); lastStatus = now; }
                 int want = 0;
+                boolean full = now - lastFull >= fullMs;
+                if (full) lastFull = now;
+                java.util.Set<Long> hotNow = hot;
                 for (Block b : blocks.values()) {
                     if (now - b.wanted > KEEP_MS) { blocks.remove(b.addr); continue; }
+                    if (!full && !hotNow.contains(b.addr)) continue;
                     cmds.add("READ_CORE_MEMORY " + Long.toHexString(b.addr) + " " + b.len); want++;
                 }
                 for (String c : cmds) {
@@ -151,7 +169,8 @@ public final class RetroArch implements Runnable {
                     handle(new String(r.getData(), 0, r.getLength(), "US-ASCII").trim());
                 }
                 got = replies;
-                Thread.sleep(ROUND_MS);
+                rounds++; reads += want;
+                Thread.sleep(Math.max(5, hotMs - (System.currentTimeMillis() - now)));
             } catch (InterruptedException e) {
                 break;
             } catch (Exception e) {

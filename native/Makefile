@@ -34,10 +34,10 @@ $(OBJDIR)/gbglue.o: gbglue.cpp $(GAMBATTE)/libgambatte/libretro/libretro.cpp
 	@$(CXX) $(CFLAGS) $(CXXONLY) -std=gnu++11 -c $< -o $@
 $(ROOT)/out/$(TARGET)/libgambatte.a: $(OBJS)
 	@llvm-ar rcs $@ $^
-android: $(ROOT)/out/android/libgambatte.a gbjni.c gbcore.c extract.c cxxrt.c
+android: $(ROOT)/out/android/libgambatte.a gbjni.c gbcore.c wide.c extract.c cxxrt.c
 	$(CC) $(CFLAGS) -std=gnu99 -shared -nostdlib -fuse-ld=lld -Wl,--gc-sections -Wl,-soname,libshantaedual.so \
 	  -Wl,--version-script=jni.map -Wl,-z,max-page-size=16384 \
-	  gbjni.c gbcore.c extract.c cxxrt.c $(ROOT)/out/android/libgambatte.a -L$(ROOT)/out/sysroot/usr/lib -lbuiltins -lm -llog -ldl -lc \
+	  gbjni.c gbcore.c wide.c extract.c cxxrt.c $(ROOT)/out/android/libgambatte.a -L$(ROOT)/out/sysroot/usr/lib -lbuiltins -lm -llog -ldl -lc \
 	  -o $(ROOT)/out/android/libshantaedual.so
-host: $(ROOT)/out/host/libgambatte.a drive.c gbcore.c extract.c
-	$(CXX) $(CFLAGS) -x c drive.c gbcore.c extract.c -x none $(ROOT)/out/host/libgambatte.a -lm -o $(ROOT)/out/host/drive
+host: $(ROOT)/out/host/libgambatte.a drive.c gbcore.c wide.c extract.c
+	$(CXX) $(CFLAGS) -x c drive.c gbcore.c wide.c extract.c -x none $(ROOT)/out/host/libgambatte.a -lm -o $(ROOT)/out/host/drive

@@ -379,7 +379,7 @@
     for (var sy = r.y >> 8; sy < Math.min(32, (r.y + r.h + 255) >> 8); sy++)
       for (var sx = r.x >> 8; sx < Math.min(32, (r.x + r.w + 255) >> 8); sx++)
         if (cellDef(N, R, sx * 256 + 8, sy * 256 + 8)) { minX = Math.min(minX, sx); minY = Math.min(minY, sy); maxX = Math.max(maxX, sx); maxY = Math.max(maxY, sy); }
-    if (maxX < 0) return r;
+    if (maxX < 0) return { x: r.x, y: r.y, w: Math.min(r.w, 8192), h: Math.min(r.h, 8192) };   // (camera limits read mid-load can be anything)
     // big open regions: keep a window of at most 8 x 8 screens around Shantae
     var cx = V.px >> 8, cy = V.py >> 8;
     minX = Math.max(minX, cx - 4); maxX = Math.min(maxX, cx + 4); minY = Math.max(minY, cy - 4); maxY = Math.min(maxY, cy + 4);
@@ -413,13 +413,8 @@
   /** Colours for a picture: the game's own once usable, else the ones it was last seen in (null: none yet, wait). */
   function colours(e, usable) { return usable ? lutNow : e.lut || null; }
 
-  M.update = function (N, playing) {
-    blink++;
-    if (!N || !N.mem || !N.rom || !N.video) { status = 'NO MAP DATA'; return; }
-    var V = playing ? readVars(N) : null;
-    if (!V || !V.tb) return;
-    var W = root.ShantaeWorld, rm = W ? W.room(V.tb, V.th, V.x, V.y) : null, street = rm && rm.kind === 'town';
-    if (V.state !== 2 && !(street && V.state === 5)) return;      // menus, dialogue, transitions: keep the last map
+  /** Where Shantae and the camera are, from the RAM values. */
+  function placeVars(N, V, W, rm, street) {
     if (street) {                                                  // a town street: the camera wraps every 640 px and
       V.w = W.STREET_W;                                            // Shantae always stands in the middle of the screen
       V.camX %= W.STREET_W; V.px = (V.camX + 80) % W.STREET_W; V.py = V.y + 112;
@@ -427,6 +422,30 @@
     } else { V.px += 26; V.py += 49; }                             // $CB43/$CB45 -> the middle of her sprites, her feet
                                                                    // (checked against OAM in several rooms)
     if (rm && rm.town) V.townDoor = street ? V.door : rm.door;
+  }
+  /** Between full updates (Shantae Link while moving): just the marker and camera, no VRAM. True when they moved. A room
+   *  change or a state that isn't play is left to M.update. */
+  M.track = function (N) {
+    if (!vars) return false;
+    var V = readVars(N);
+    if (!V || !V.tb) return false;
+    var W = root.ShantaeWorld, rm = W ? W.room(V.tb, V.th, V.x, V.y) : null, street = rm && rm.kind === 'town';
+    if (V.state !== 2 && !(street && V.state === 5)) return false;
+    placeVars(N, V, W, rm, street);
+    if (V.tb !== vars.tb || V.th !== vars.th || V.df !== vars.df || V.x !== vars.x || V.y !== vars.y || V.w !== vars.w || V.h !== vars.h) return false;
+    if (V.camX === vars.camX && V.camY === vars.camY && V.px === vars.px && V.py === vars.py && V.door === vars.door) return false;
+    vars = V;
+    return true;
+  };
+
+  M.update = function (N, playing) {
+    blink++;
+    if (!N || !N.mem || !N.rom || !N.video) { status = 'NO MAP DATA'; return; }
+    var V = playing ? readVars(N) : null;
+    if (!V || !V.tb) return;
+    var W = root.ShantaeWorld, rm = W ? W.room(V.tb, V.th, V.x, V.y) : null, street = rm && rm.kind === 'town';
+    if (V.state !== 2 && !(street && V.state === 5)) return;      // menus, dialogue, transitions: keep the last map
+    placeVars(N, V, W, rm, street);
     vars = V;
     var fh = N.mem('CB1B:48'); if (fh && fh.length >= 96) { flags = []; for (var q = 0; q < 96; q += 2) flags.push(parseInt(fh.substr(q, 2), 16)); }
     var key = [V.tb, V.th, V.df, V.x, V.y, V.w, V.h].join(','), now = Date.now();

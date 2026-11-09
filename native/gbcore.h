@@ -37,3 +37,16 @@ typedef void (*gbx_sink)(int id, const void *data, size_t n, void *user);
 typedef int (*gbx_progress)(int percent, void *user);   /* return nonzero to cancel */
 int gb_extract(gbx_sink sink, gbx_progress progress, void *user);
 int gb_overclock_supported(void);
+const uint8_t *gb_rom(size_t *n);              /* the loaded ROM as read from the file */
+/* WIDE VIEW (wide.c): gb_view asks for a picture wider than the Game Boy's: gb_frame then gives the world around the real picture
+ * (at gb_wide_left, gb_wide_top in it) wherever the game is drawing a level, the real 160 x 144 elsewhere. 160 is off. Also moves the
+ * game's spawn window to match. Call between frames. */
+#define GB_WIDE_MAX 64
+int gb_wide_left(void);
+int gb_wide_top(void);
+int gb_wide_bg_out(void);
+void gb_wide_skip(int skip);                   /* 1: gb_run doesn't build the wide picture (a frame nobody will see). gambatte build only */
+const uint16_t *gb_native(int *w);             /* the real picture alone, whatever gb_frame gives; gambatte build only */
+/* Which core: 0 gambatte, 1 the static recompilation (native/recomp). The recomp also takes gb_view's height. */
+int gb_backend(void);
+void gb_view(int width, int height);

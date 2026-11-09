@@ -11,7 +11,7 @@ font = base64.b64encode(tiles[0x1000:0x1800]).decode()
 thumb = 'data:image/png;base64,' + base64.b64encode(open('/home/claude/shantae-dual/tests/standin.png', 'rb').read()).decode()
 def init(mode, extra=''):
     return """
-var S={aspect:'square',bezels:true,integer:false,color:'lcd',blend:'off',touch:'auto',padOpacity:70,split:'auto',swap:false,side:false,useExternal:true,skipLauncher:false,audio:true,gbaMode:true,overclock:true%s};
+var S={aspect:'square',bezels:true,integer:false,color:'lcd',touch:'auto',padOpacity:70,split:'auto',swap:false,side:false,useExternal:true,skipLauncher:false,audio:true,gbaMode:true,overclock:true%s};
 window.Host={ info:function(){return JSON.stringify({version:'0.1',mode:'%s',rom:{present:true,ok:true,crc:'e994b59b'},auto:true,settings:S,
   screens:{how:'hinge'},linkShown:true,slots:[{n:1,time:Date.now()-3600e3},{n:2,time:0},{n:3,time:Date.now()},{n:4,time:0}]});},
   font:function(){return '%s';}, thumb:function(n){return n==2?'':'%s';}, set:function(k,v){S[k]=v==='true'?true:v==='false'?false:v;},

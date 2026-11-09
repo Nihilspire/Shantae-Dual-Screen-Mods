@@ -49,7 +49,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.zip.CRC32;
 
 public class MainActivity extends Activity {
-    static final String VERSION = "0.34";
+    static final String VERSION = "0.45";
+    static final String ALPHA = "0.1-alpha";   // the recomp build's own number (tools/build_recomp_apk.sh)
+    static String version() { return Native.backend() == 1 ? ALPHA : VERSION; }
     static final int PICK_ROM = 1;
 
     SharedPreferences prefs;
@@ -121,8 +123,11 @@ public class MainActivity extends Activity {
         gamePane.addView(pad, new FrameLayout.LayoutParams(-1, -1));
         gamePane.addView(menu, new FrameLayout.LayoutParams(-1, -1));
         linkPane.addView(link, new FrameLayout.LayoutParams(-1, -1));
+        panelArrow = new PanelArrow(this);
+        panelArrow.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { setPanel(!panelOpen, true); } });
         root.addView(gamePane);
         root.addView(linkPane);
+        root.addView(panelArrow);
         setContentView(root);
         applySettings();
 
@@ -220,8 +225,10 @@ public class MainActivity extends Activity {
 
     void openMenu() {
         if (menuOpen) return;
+        setPanel(false, false);     // the panel is above the menu
         emu.setPaused(true);
         menuOpen = true;
+        syncPanel();
         menu.setVisibility(View.VISIBLE);
         menu.requestFocus();
         evalMenu("window.show&&show('pause')");
@@ -233,13 +240,57 @@ public class MainActivity extends Activity {
         evalMenu("window.musicStop&&musicStop()");
         game.requestFocus();
         if (started) emu.setPaused(false);
+        syncPanel();
+    }
+
+    // ------------------------------------------------------------------ SINGLE SCREEN (0.42, after Xenogears Dual's panel)
+    // The game fills the window and WIDE VIEW fills its sides. Link's page sits just past the right edge, still running, so its map and
+    // bestiary keep up; the arrow slides it in over the game. The game keeps running under it, and its controller input stays with the game.
+    PanelArrow panelArrow;
+    boolean panelOpen;
+    private float panelT;                       // 0 shut .. 1 open
+    private android.animation.ValueAnimator panelAnim;
+
+    boolean singleScreen() { return prefs.getString("layout", "second").equals("single"); }
+
+    void setPanel(boolean open, boolean animate) {
+        if (open && (!singleScreen() || !started || menuOpen)) return;
+        panelOpen = open;
+        setHud();
+        if (panelAnim != null) { panelAnim.cancel(); panelAnim = null; }
+        if (!animate) { panelT = open ? 1 : 0; syncPanel(); return; }
+        panelAnim = android.animation.ValueAnimator.ofFloat(panelT, open ? 1 : 0);
+        panelAnim.setDuration(260);
+        panelAnim.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        panelAnim.addUpdateListener(new android.animation.ValueAnimator.AnimatorUpdateListener() {
+            public void onAnimationUpdate(android.animation.ValueAnimator a) { panelT = (Float) a.getAnimatedValue(); syncPanel(); }
+        });
+        panelAnim.start();
+    }
+
+    /** Puts the panel and arrow where panelT says, and shows the arrow only in play. */
+    void syncPanel() {
+        if (panelArrow == null || root == null) return;
+        if (!singleScreen()) {
+            panelOpen = false; panelT = 0;
+            linkPane.setTranslationX(0); panelArrow.setTranslationX(0);
+            if (panelArrow.getVisibility() != View.GONE) panelArrow.setVisibility(View.GONE);
+            return;
+        }
+        int pw = root.panelW;
+        linkPane.setTranslationX(pw * (1 - panelT));
+        panelArrow.setTranslationX(-pw * panelT);
+        panelArrow.setOpen(panelT);
+        int vis = started && !menuOpen ? View.VISIBLE : View.GONE;
+        if (panelArrow.getVisibility() != vis) panelArrow.setVisibility(vis);
     }
 
     void quitToLauncher() {
         boolean was = started;
         started = false;          // stop frames and RAM reads first, then save and unload between frames
+        setPanel(false, false);
         if (was) emu.call(new Runnable() { public void run() { saveSlot("auto"); saveSram(true); Native.unload(); } }, 3000);
-        synchronized (game.lock) { game.frame = null; }
+        game.clearFrame();
         game.invalidate();
         evalMenu("window.show&&show('launcher')");
         ensureAssets();                                  // after a GBA mode / colour change made while playing
@@ -273,6 +324,8 @@ public class MainActivity extends Activity {
     void applySettings() {
         game.aspect = prefs.getString("aspect", "square");
         game.bezels = prefs.getBoolean("bezels", true);
+        game.wideOn = prefs.getBoolean("wideView", true);
+        game.viewRows = parseInt(prefs.getString("viewRows", "144"), 144);
         game.integer = prefs.getBoolean("integer", false);
         game.showStats = prefs.getBoolean("stats", false);
         loadCodes();
@@ -309,15 +362,20 @@ public class MainActivity extends Activity {
 
     static final int SLOTS = 4;
 
-    /** Core options from settings. GBA MODE and the colour/blend settings go to Gambatte; GBA MODE needs a restart. */
+    /** Core options from settings. GBA MODE and the colour setting go to Gambatte; GBA MODE needs a restart. */
     void applyCoreOptions() {
         Native.setOption("gambatte_gb_hwmode", prefs.getBoolean("gbaMode", true) ? "GBA" : "GBC");
         Native.setOption("gambatte_gbc_color_correction", prefs.getString("color", "lcd").equals("lcd") ? "GBC only" : "disabled");
-        Native.setOption("gambatte_mix_frames", prefs.getString("blend", "off").equals("off") ? "disabled"
-                : prefs.getString("blend", "off").equals("ghost") ? "lcd_ghosting" : "mix");
         // ALL SPRITES (0.17): draw sprites past the hardware's 10 per line (gambatte-dual.patch, ppu.cpp)
         Native.setOption("dual_sprite_limit", prefs.getBoolean("allSprites", true) ? "off" : "on");
+        if (Native.backend() == 1) {                     // the recomp's changes to the game, on as upstream has them (menu: RECOMP)
+            for (String k : RC_TOGGLES) Native.setOption("recomp_" + k, prefs.getBoolean("rc_" + k, true) ? "1" : "0");
+            Native.setOption("recomp_whip", prefs.getString("rc_whip", "1"));
+            Native.setOption("recomp_text_speed", prefs.getString("rc_text_speed", "10"));
+        }
     }
+    static final String[] RC_TOGGLES = { "input_lag", "smooth_moves", "air_speed", "fast_crawl", "smooth_forms", "easy_dance", "quick_steps", "safe_transform" };
+    static int parseInt(String s, int or) { try { return Integer.parseInt(s); } catch (NumberFormatException e) { return or; } }
 
     // ------------------------------------------------------------------ playtest codes (hidden, Konami code)
     volatile boolean codeHearts, codeGems, devUsed;
@@ -384,14 +442,14 @@ public class MainActivity extends Activity {
     }
 
     boolean linkVisibleSomewhere() {
-        return presentation != null || root.split != 0 || root.side || linkOverlay;
+        return presentation != null || root.split != 0 || root.side || linkOverlay || panelOpen;
     }
 
     // ------------------------------------------------------------------ second display (presentation)
 
     void updatePresentation() {
         Display target = null;
-        if (prefs.getBoolean("useExternal", true)) {
+        if (prefs.getBoolean("useExternal", true) && !singleScreen()) {
             Display mine = getWindowManager().getDefaultDisplay();
             for (Display d : displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION))
                 if (d.getDisplayId() != mine.getDisplayId()) { target = d; break; }
@@ -466,9 +524,14 @@ public class MainActivity extends Activity {
             if (down) { linkOverlay = false; root.requestLayout(); setHud(); }
             return true;
         }
+        if (panelOpen && code == KeyEvent.KEYCODE_BACK) {
+            if (down) setPanel(false, true);
+            return true;
+        }
         if (code == KeyEvent.KEYCODE_BACK && down) { openMenu(); return true; }
         if (btn < 0) return super.dispatchKeyEvent(e);
         if (btn == 10) { if (down) openMenu(); return true; }
+        if (btn == 14) { if (down && e.getRepeatCount() == 0) setPanel(!panelOpen, true); return true; }
         int bit = btn < 8 ? Gb.BUTTON_BITS[btn] : 0;
         int special = btn >= 8 ? 1 << (btn - 8) : 0;
         if (down) { keyBits |= bit; specialBits |= special; } else { keyBits &= ~bit; specialBits &= ~special; }
@@ -579,7 +642,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String info() {
             try {
                 JSONObject o = new JSONObject();
-                o.put("version", VERSION);
+                o.put("version", version());
+                o.put("recomp", Native.backend() == 1);
                 o.put("mode", started ? "pause" : "launcher");
                 o.put("rom", romInfo());
                 o.put("auto", new File(stateDir, "auto.st").exists());
@@ -589,6 +653,11 @@ public class MainActivity extends Activity {
                 JSONObject s = new JSONObject();
                 s.put("aspect", prefs.getString("aspect", "square"));
                 s.put("bezels", prefs.getBoolean("bezels", true));
+                s.put("wideView", prefs.getBoolean("wideView", true));
+                s.put("viewRows", prefs.getString("viewRows", "144"));
+                for (String k : RC_TOGGLES) s.put("rc_" + k, prefs.getBoolean("rc_" + k, true));
+                s.put("rc_whip", prefs.getString("rc_whip", "1"));
+                s.put("rc_text_speed", prefs.getString("rc_text_speed", "10"));
                 s.put("integer", prefs.getBoolean("integer", false));
                 s.put("touch", prefs.getString("touch", "auto"));
                 s.put("padOpacity", prefs.getInt("padOpacity", 70));
@@ -597,6 +666,7 @@ public class MainActivity extends Activity {
                 s.put("gap", prefs.getInt("gap", 0));
                 s.put("side", prefs.getBoolean("side", false));
                 s.put("useExternal", prefs.getBoolean("useExternal", true));
+                s.put("layout", prefs.getString("layout", "second"));
                 s.put("skipLauncher", prefs.getBoolean("skipLauncher", false));
                 s.put("audio", prefs.getBoolean("audio", true));
                 s.put("overclock", prefs.getBoolean("overclock", true));
@@ -605,7 +675,6 @@ public class MainActivity extends Activity {
                 s.put("stats", prefs.getBoolean("stats", false));
                 s.put("gbaMode", prefs.getBoolean("gbaMode", true));
                 s.put("color", prefs.getString("color", "lcd"));
-                s.put("blend", prefs.getString("blend", "off"));
                 s.put("allSprites", prefs.getBoolean("allSprites", true));
                 s.put("devUnlock", prefs.getBoolean("devUnlock", false));
                 s.put("codeHearts", prefs.getBoolean("codeHearts", false));
@@ -668,11 +737,12 @@ public class MainActivity extends Activity {
                 else if (k.equals("padOpacity") || k.equals("gap")) ed.putInt(k, Integer.parseInt(v));
                 else ed.putString(k, v);
                 ed.apply();
-                if (k.equals("color") || k.equals("blend") || k.equals("gbaMode") || k.equals("allSprites")) applyCoreOptions();
+                if (k.equals("color") || k.equals("gbaMode") || k.equals("allSprites") || k.startsWith("rc_")) applyCoreOptions();
                 if ((k.equals("color") || k.equals("gbaMode")) && !started) ensureAssets();
                 if (k.equals("overclock")) Native.setOverclock(v.equals("true"));
                 if (k.equals("touch")) usingPad = false;
-                if (k.equals("useExternal")) updatePresentation();
+                if (k.equals("useExternal") || k.equals("layout")) updatePresentation();
+                if (k.equals("layout")) setPanel(false, false);
                 applySettings();
                 setHud();
             } });
@@ -695,6 +765,11 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public void showLink(final boolean on) {
             ui.post(new Runnable() { public void run() {
+                if (singleScreen()) {
+                    if (on) closeMenu();
+                    setPanel(on, true);
+                    return;
+                }
                 linkOverlay = on;
                 root.requestLayout();
                 setHud();
@@ -705,7 +780,7 @@ public class MainActivity extends Activity {
 
     /** Bridge for the Link page (assets/link). Same idea as the Link apps' window.Native, answered from emulator RAM. */
     final class LinkBridge {
-        @JavascriptInterface public String version() { return VERSION; }
+        @JavascriptInterface public String version() { return MainActivity.version(); }
         @JavascriptInterface public boolean dual() { return true; }
         @JavascriptInterface public boolean running() { return started && Native.peek(0) >= 0; }
         @JavascriptInterface public String mem(String spec) { return started ? Native.mem(spec) : ""; }
@@ -714,6 +789,11 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String font() { return gfx.ready() ? Base64.encodeToString(gfx.tiles, Gb.FONT_BASE, 0x800, Base64.NO_WRAP) : ""; }
         @JavascriptInterface public String rom(int off, int len) { return romB64(off, len); }
         @JavascriptInterface public boolean overlay() { return linkOverlay; }
+        /** SINGLE SCREEN: the page is in the slide-in panel. */
+        @JavascriptInterface public boolean panelOn() { return singleScreen(); }
+        @JavascriptInterface public void panel(final boolean open) {
+            ui.post(new Runnable() { public void run() { setPanel(open, true); } });
+        }
         @JavascriptInterface public void close() {
             ui.post(new Runnable() { public void run() { linkOverlay = false; root.requestLayout(); setHud(); } });
         }
@@ -783,10 +863,9 @@ public class MainActivity extends Activity {
         private final Object pauseLock = new Object();
         private volatile boolean paused = true, quit;
         private final ConcurrentLinkedQueue<Runnable> jobs = new ConcurrentLinkedQueue<Runnable>();
-        private final Bitmap[] bufs = new Bitmap[3];
-        private int bufIdx, fw, fh;
-        private Bitmap last;
-        private final ByteBuffer px = ByteBuffer.allocateDirect(160 * 144 * 2).order(ByteOrder.nativeOrder());
+        private int fw, fh;
+        private final ByteBuffer px = ByteBuffer.allocateDirect(Native.PIC_W * Native.PIC_H * 2).order(ByteOrder.nativeOrder());
+        private int viewW, viewH;
         private final short[] samples = new short[16384];
         private AudioOut audio;
         final VSync vsync = new VSync();
@@ -860,7 +939,14 @@ public class MainActivity extends Activity {
             if (!paused) audio.play();
         }
 
-        Bitmap lastFrame() { return last; }
+        /** The picture just run, for a save slot's thumbnail. On the emulation thread. */
+        Bitmap lastFrame() {
+            if (fw == 0) return null;
+            Bitmap b = Bitmap.createBitmap(fw, fh, Bitmap.Config.RGB_565);
+            px.clear(); px.limit(fw * fh * 2); b.copyPixelsFromBuffer(px); px.clear();
+            // Thumbnails have the original's shape in the menus: a wider picture (WIDE VIEW) gives its middle
+            return fw > 160 || fh > 144 ? Bitmap.createBitmap(b, (fw - 160) / 2, (fh - 144) / 2, 160, 144) : b;
+        }
 
         /*
          * Pacing: one emulated frame per display refresh (or per N refreshes on 120/144 Hz screens) when the
@@ -917,6 +1003,10 @@ public class MainActivity extends Activity {
                 if (fast) runs *= 3;
                 boolean audioOn = prefs.getBoolean("audio", true);
                 int r = 0;
+                if (game.wantW > 0 && (game.wantW != viewW || game.wantH != viewH)) {
+                    viewW = game.wantW; viewH = game.wantH;
+                    Native.view(viewW, viewH);
+                }
                 for (int i = 0; i < runs; i++) {
                     int turbo = ((frame >> 1) & 1) == 0 ? 0 : ((specialBits & 1) != 0 ? Gb.B : 0) | ((specialBits & 2) != 0 ? Gb.A : 0);
                     int held = keyBits | axisBits | pad.bits;
@@ -955,18 +1045,8 @@ public class MainActivity extends Activity {
         }
 
         private void publish(int w, int h) {
-            Bitmap b = bufs[bufIdx];
-            if (b == null || fw != w || fh != h) {
-                fw = w; fh = h;
-                for (int i = 0; i < 3; i++) bufs[i] = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
-                b = bufs[bufIdx];
-            }
-            px.rewind();
-            b.copyPixelsFromBuffer(px);
-            synchronized (game.lock) { game.frame = b; }
-            last = b;
-            bufIdx = (bufIdx + 1) % 3;
-            game.postInvalidateOnAnimation();
+            fw = w; fh = h;
+            game.post(px, w, h);
         }
 
         /** The 3D view's frame: room/camera/Shantae RAM (view3d.js poll()) and the video snapshot, taken as the picture
@@ -1028,6 +1108,7 @@ public class MainActivity extends Activity {
             map.put(KeyEvent.KEYCODE_BUTTON_SELECT, 6); map.put(KeyEvent.KEYCODE_BUTTON_START, 7);
             map.put(KeyEvent.KEYCODE_BUTTON_MODE, 10); map.put(KeyEvent.KEYCODE_BUTTON_R1, 11);
             map.put(KeyEvent.KEYCODE_BUTTON_L2, 12); map.put(KeyEvent.KEYCODE_BUTTON_R2, 13);
+            map.put(KeyEvent.KEYCODE_BUTTON_L1, 14);
             map.put(KeyEvent.KEYCODE_Z, 4); map.put(KeyEvent.KEYCODE_X, 5);
             map.put(KeyEvent.KEYCODE_SHIFT_RIGHT, 6); map.put(KeyEvent.KEYCODE_ENTER, 7);
             map.put(KeyEvent.KEYCODE_ESCAPE, 10); map.put(KeyEvent.KEYCODE_TAB, 11);
@@ -1042,6 +1123,8 @@ public class MainActivity extends Activity {
                 map.clear();
                 Iterator<String> it = o.keys();
                 while (it.hasNext()) { String k = it.next(); map.put(Integer.parseInt(k), o.getInt(k)); }
+                // saved before LINK PANEL existed (0.42): give it L1 if that's free
+                if (map.indexOfValue(14) < 0 && map.get(KeyEvent.KEYCODE_BUTTON_L1, -1) < 0) map.put(KeyEvent.KEYCODE_BUTTON_L1, 14);
             } catch (Exception e) { defaults(); }
         }
 

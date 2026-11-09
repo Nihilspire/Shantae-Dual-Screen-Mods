@@ -6,7 +6,7 @@ from PIL import Image
 ROOT = '/home/claude/shantae-dual'
 thumb = 'data:image/png;base64,' + base64.b64encode(open('/home/claude/shantae-dual/tests/standin.png', 'rb').read()).decode()
 init = """
-var S={aspect:'square',bezels:true,integer:false,color:'lcd',blend:'off',touch:'auto',padOpacity:70,split:'auto',swap:false,side:false,useExternal:true,skipLauncher:false,audio:true,gbaMode:true,overclock:true,music:true,musicSrc:'game'};
+var S={aspect:'square',bezels:true,integer:false,color:'lcd',touch:'auto',padOpacity:70,split:'auto',swap:false,side:false,useExternal:true,skipLauncher:false,audio:true,gbaMode:true,overclock:true,music:true,musicSrc:'game'};
 window.Host={ info:function(){return JSON.stringify({version:'0.28',mode:'MODE',rom:{present:true,ok:true},auto:true,settings:S,extracting:EX,extractPct:63,assets:!EX,
   screens:{how:'hinge'},linkShown:false,slots:[{n:1,time:Date.now()-3600e3},{n:2,time:0},{n:3,time:Date.now()},{n:4,time:0}]});},
   font:function(){return '';}, titleMusic:function(){return true;}, extractAgain:function(){},

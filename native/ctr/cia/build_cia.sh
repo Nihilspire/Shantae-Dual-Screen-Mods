@@ -13,7 +13,7 @@ B=$OUT/cia; mkdir -p "$B"
 python3 "$HERE/banner/make_art.py" "$B"
 python3 -c "import wave,sys; w=wave.open(sys.argv[1],'wb'); w.setnchannels(2); w.setsampwidth(2); w.setframerate(32728); w.writeframes(bytes(4*3273)); w.close()" "$B/silence.wav"
 "$TOOLS/bannertool-bin" makebanner -i "$B/banner.png" -a "$B/silence.wav" -o "$B/banner.bnr"   # silent banner
-"$TOOLS/bannertool-bin" makesmdh -s "Shantae Dual 3DS" -l "Shantae Dual 3DS $VER: Shantae (USA) + a Link screen" \
+"$TOOLS/bannertool-bin" makesmdh -s "Shantae Dual 3DS" -l "Shantae Dual 3DS $VER: Shantae (USA) + a Link screen. Wide view: polyformproject.org/licenses/noncommercial/1.0.0" \
     -p "Jack" -i "$B/icon.png" -o "$B/icon.icn"
 "$TOOLS/makerom-bin" -f cia -o "$OUT/Shantae Dual 3DS.cia" -target t -exefslogo \
     -elf "$OUT/shantaedual3ds.elf" -rsf "$HERE/cia/shantaedual.rsf" -icon "$B/icon.icn" -banner "$B/banner.bnr" \

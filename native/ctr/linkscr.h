@@ -18,7 +18,8 @@ typedef struct {
     unsigned fps;                                 /* emulated frames in the last second, for the corner (0 = hide) */
 } LinkIn;
 
-/* Loads the font from the player's ROM (LZSS at 0x3964A3). Returns 0 when the ROM is too short. */
+/* Loads the font (LZSS at 0x3964A3) and builds the inventory icons and Shantae from the player's ROM. Returns 0 when the
+ * ROM is too short. */
 int link_init(const uint8_t *rom, size_t len);
 /* Every emulated frame: catches the inventory icons, and draws a new room's map a few rows at a time. */
 void link_work(const LinkIn *in);
@@ -46,7 +47,7 @@ typedef struct {
                                                     top screen and the Link screen per shown frame, the slowest loop */
 } LinkMenu;
 /* MENU_REDRAW: the menu changed (its settings page opened or closed, a button was given): draw it again */
-enum { MENU_NONE = -1, MENU_RESUME = 0, MENU_QUIT = 1, MENU_BORDERS = 2, MENU_REDRAW = 3, MENU_OLD3DS = 4, MENU_FRAMESKIP = 5, MENU_SAVE = 10, MENU_LOAD = 20 };   /* + slot 0-2 */
+enum { MENU_NONE = -1, MENU_RESUME = 0, MENU_QUIT = 1, MENU_BORDERS = 2, MENU_REDRAW = 3, MENU_OLD3DS = 4, MENU_FRAMESKIP = 5, MENU_WIDE = 6, MENU_SAVE = 10, MENU_LOAD = 20 };   /* + slot 0-2 */
 void link_menu_draw(uint16_t *fb, const LinkMenu *m);
 int link_menu_tap(int x, int y, const LinkMenu *m);
 /* B or START in the menu: back from the settings page (returns 1), or 0 to resume the game */
@@ -73,14 +74,19 @@ int link_old3ds(int set);
 /* FRAME SKIP (0.12): at the old 3DS's speed, the loop keeps to the clock and leaves out pictures it has no time for,
  * so the game and music stay at full speed; -1 reads, 0 off, 1 on */
 int link_frameskip(int set);
+/* WIDE VIEW (0.15): the world beside the Game Boy's picture across the top screen, New 3DS speed only; -1 reads, 0 off, 1 on */
+int link_wide(int set);
 /* the stylus held at (x, y) on the Link screen, or (-1, -1) when lifted: signing the ending card */
 void link_pen(int x, int y);
 /* a signed ending card, once, for the frontend to append to its file (returns the length, 0 if none) */
 size_t link_hall_take(uint8_t *buf, size_t cap);
-/* The captured inventory icons, to keep on the SD card: link_icons_save fills buf (returns the length, 0 if none or
- * unchanged since the last save), link_icons_load restores them. */
-size_t link_icons_save(uint8_t *buf, size_t cap);
-void link_icons_load(const uint8_t *buf, size_t n);
+/* The monsters met, to keep on the SD card: link_monsters_save fills buf (returns the length, 0 if unchanged since the
+ * last save), link_monsters_load restores them. */
+#define LINK_MONSTERS_MAX 4096
+size_t link_monsters_save(uint8_t *buf, size_t cap);
+void link_monsters_load(const uint8_t *buf, size_t n);
+/* Auto dance: Game Boy buttons (libretro joypad bits) to add for the next emulated frame. Call once per frame run. */
+unsigned link_dance_pad(void);
 /* A drag on the Link screen by (dx, dy) pixels (the map pans; a tap is link_tap on release without a drag). */
 void link_drag(int dx, int dy, const LinkIn *in);
 /* The top screen's borders into a 400x240 RGB565 buffer (row-major): the area's own tile, darkened, a frame around the
@@ -89,7 +95,7 @@ int link_border(uint16_t *buf, const LinkIn *in);
 
 /* linkmap.c (used by linkscr.c) */
 void map_work(const LinkIn *in);
-/* Icon keys: 0-11 items, 12-15 stones, 16-19 talismans, 20 squid, 21 firefly. drawIcon returns 0 when not captured. */
+/* Icon keys: 0-11 items, 12-15 stones, 16-19 talismans, 20 squid, 21 firefly. drawIcon returns 0 when there's no such icon. */
 enum { ICON_ITEM = 0, ICON_STONE = 12, ICON_TAL = 16, ICON_SQUID = 20, ICON_FLY = 21, ICON_N = 22 };
 /* Draws the map into the box; returns 0 when there's no picture yet (map_status() says why). tag draws a landmark's
  * label (town door numbers, cave numbers, EXIT, G for a Guardian Genie); style 0 plain, 1 her door, 2 a way out, 3 gold. */

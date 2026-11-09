@@ -7,8 +7,8 @@ final class Gb {
     // RETRO_DEVICE_ID_JOYPAD_* bits
     static final int B = 1, Y = 1 << 1, SELECT = 1 << 2, START = 1 << 3, UP = 1 << 4, DOWN = 1 << 5,
             LEFT = 1 << 6, RIGHT = 1 << 7, A = 1 << 8;
-    static final String[] BUTTON_NAMES = { "UP", "DOWN", "LEFT", "RIGHT", "B", "A", "SELECT", "START", "TURBO B", "TURBO A", "MENU", "FAST", "SAVE", "LOAD" };
-    static final int[] BUTTON_BITS = { UP, DOWN, LEFT, RIGHT, B, A, SELECT, START, 0, 0, 0, 0, 0, 0 };
+    static final String[] BUTTON_NAMES = { "UP", "DOWN", "LEFT", "RIGHT", "B", "A", "SELECT", "START", "TURBO B", "TURBO A", "MENU", "FAST", "SAVE", "LOAD", "LINK PANEL" };
+    static final int[] BUTTON_BITS = { UP, DOWN, LEFT, RIGHT, B, A, SELECT, START, 0, 0, 0, 0, 0, 0, 0 };
 
     // Shantae (USA) RAM (WRAM bank 0 unless noted)
     static final int GAME_STATE = 0xC39D,            // 2 = playing, 5 = dialogue, 0 = title/menus

@@ -11,6 +11,7 @@ ap.add_argument('--ra', action='store_true', help='Shantae Link: linkapp/ra.js o
                 'RetroArch reaches with the Gambatte core (tests/mock_ra.py lookup)')
 ap.add_argument('--eval', action='append', default=[], help='JS expression to print after the shots (debugging)')
 ap.add_argument('--ra-core', default='gambatte', help='with --ra: the core whose memory map RetroArch exposes (gambatte, mgba)')
+ap.add_argument('--stalls', type=int, default=0, help='slow the CPU by this factor and print every long task with the stage it was in')
 ap.add_argument('--ra-blocks', help='with --ra: answer from this JSON {hex addr: hex bytes} taken from a live RetroArch '
                 '(tests/ra_snapshot.py) instead of the dump')
 ap.add_argument('--ra-state', default='', help='with --ra: norom, badrom, noreply, nogame or wrong (the setup screen)')
@@ -83,6 +84,8 @@ window.RA = { version: function () { return '0.1'; },
       Object.keys(BLK).forEach(function (k) { var q = k.split(':'), s = +q[0], b = BLK[k];         // every block holding a
         if (a >= s && a < s + +q[1]) BLK[k] = b.substr(0, (a - s) * 2) + h + b.substr((a - s) * 2 + h.length); }); },
   rom: function (off, len) { return off < romBin.length ? btoa(romBin.substr(off, len)) : ''; },
+  setPace: function (h, f) { (window.__pace = window.__pace || []).push(h + '/' + f); }, setHot: function (c) { window.__hot = c; },
+  beat: function (s) { window.__beat = s; (window.__beats = window.__beats || []).push([performance.now(), s]); }, lastHang: function () { var h = localStorage.getItem('test.hang') || ''; localStorage.removeItem('test.hang'); return h; },
   romInfo: function () { return %s; }, pickRom: function () { __sent.push('PICKROM'); }, editHost: function () { __sent.push('EDITHOST'); } };
 """ % (base64.b64encode(rom).decode(),
        json.dumps({'%d:%d' % (int(k, 16), len(v) // 2): v for k, v in json.load(open(a.ra_blocks)).items()} if a.ra_blocks else ra_blocks(dump)), json.dumps(json.dumps(status)), json.dumps(rominfo)) + open(ROOT + '/linkapp/ra.js').read()
@@ -92,6 +95,14 @@ with sync_playwright() as p:
     pg.on('pageerror', lambda e: errs.append(str(e)))
     pg.on('console', lambda m: errs.append('console: ' + m.text) if m.type == 'error' else None)
     pg.add_init_script(mock)
+    if a.stalls:
+        pg.context.new_cdp_session(pg).send('Emulation.setCPUThrottlingRate', {'rate': a.stalls})
+        pg.add_init_script("""window.__load = (+sessionStorage.getItem('st.load') || 0) + 1; sessionStorage.setItem('st.load', window.__load);
+          function __beatAt(t) { var s = 'before the first beat'; (window.__beats || []).forEach(function (b) { if (b[0] <= t) s = b[1]; }); return s; }
+          try { new PerformanceObserver(function (l) { l.getEntries().forEach(function (e) {
+            var a = JSON.parse(sessionStorage.getItem('st.long') || '[]');
+            a.push([window.__load, Math.round(e.startTime), Math.round(e.duration), __beatAt(e.startTime + e.duration)]);
+            sessionStorage.setItem('st.long', JSON.stringify(a)); }); }).observe({ entryTypes: ['longtask'] }); } catch (e) { sessionStorage.setItem('st.obs', String(e)); }""")
     for kv in a.ls:   # --ls key=json: preset a localStorage value (e.g. sd.listOpen='"squid"')
         k, v = kv.split('=', 1); pg.add_init_script('try { localStorage.setItem(%s, %s); } catch (e) {}' % (json.dumps(k), json.dumps(v)))
     if a.standin:   # shareable preview: no ROM font, placeholder map tiles (flat colour per palette, light/dark by tile)
@@ -123,6 +134,7 @@ with sync_playwright() as p:
             pg.wait_for_timeout(110)
             pg.screenshot(path=f"{a.out}_{os.path.basename(f)[1:-4]}.png")
         for js in a.eval: print('eval', js, '->', pg.evaluate(js))
+        for js in a.eval: print('eval', js, '->', pg.evaluate(js))
         print('errors', errs); b.close(); sys.exit(0)
     for t in a.tabs.split(','):
         pg.evaluate(f"localStorage.setItem('sd.tab', JSON.stringify('{t}'))"); pg.reload(); pg.wait_for_timeout(a.wait)   # 0.13 map: waits for settled colours
@@ -145,5 +157,9 @@ with sync_playwright() as p:
             print('banks fetched:', pg.evaluate('(function(){var n=0,o=Native.rom;Native.rom=function(a,b){n++;return o(a,b)};ShantaeMap._bench(Native,true);Native.rom=o;return n})()'))
     if a.ra: print('sent to RetroArch', pg.evaluate('window.__sent'))
     for js in a.eval: print('eval', js, '->', pg.evaluate(js))
+    if a.stalls:
+        L = pg.evaluate("JSON.parse(sessionStorage.getItem('st.long') || '[]')")
+        print('long tasks (over 50 ms): %d, total %d ms, longest %d ms; observer error: %s' % (len(L), sum(x[2] for x in L), max([x[2] for x in L] or [0]), pg.evaluate("sessionStorage.getItem('st.obs')")))
+        for ld, t, ms, s in sorted(L, key=lambda x: -x[2])[:12]: print('  load %d at %6d ms: %5d ms, stage %s' % (ld, t, ms, s))
     print('errors', errs)
     b.close()

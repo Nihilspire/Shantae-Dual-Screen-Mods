@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
   while (fgets(line, sizeof line, sc)) {
     char cmd[32] = "", a[200] = "", b[64] = ""; sscanf(line, "%31s %199s %63s", cmd, a, b);
     if (!strcmp(cmd, "run")) { int n = atoi(a); gb_set_pad(parse(b)); for (int i = 0; i < n; i++) step(); }
+    else if (!strcmp(cmd, "wideinfo")) { int w, h, f; gb_frame(&w, &h, &f); printf("wide %d %d %d %d\n", w, gb_wide_left(), gb_wide_top(), gb_wide_bg_out()); }
+    else if (!strcmp(cmd, "view")) gb_view(atoi(a), atoi(b));   /* WIDE VIEW: the picture's width, 160 off (the recomp build takes a height too) */
     else if (!strcmp(cmd, "tap")) { for (int k = 0; k < 2; k++) { gb_set_pad(k ? 0 : parse(a)); for (int i = 0; i < 6; i++) step(); } }
     else if (!strcmp(cmd, "shot")) { int w, h, f; const uint16_t *p = gb_frame(&w, &h, &f); FILE *o = fopen(a, "wb");
       fprintf(o, "P6 %d %d 255\n", w, h);
@@ -82,6 +84,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(cmd, "oc")) gb_set_overclock(atoi(a));
     else if (!strcmp(cmd, "opt")) gb_set_option(a, b);
     else if (!strcmp(cmd, "reset")) gb_reset();
+    else if (!strcmp(cmd, "reload")) { gb_unload(); if (gb_load(argv[1])) { fprintf(stderr, "reload failed\n"); return 1; } }   /* as quitting to the launcher and starting again */
     else if (!strcmp(cmd, "drops")) { extern unsigned gbx_vram_drops; extern unsigned gbx_pal_drops; printf("drops %u %u\n", gbx_vram_drops, gbx_pal_drops); gbx_vram_drops = gbx_pal_drops = 0; fflush(stdout); }
     else if (!strcmp(cmd, "echo")) { printf("%s", line + 5); fflush(stdout); }
   }

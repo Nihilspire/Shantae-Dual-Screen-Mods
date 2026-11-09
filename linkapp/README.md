@@ -1,4 +1,28 @@
-# Shantae Link 0.8 (RetroArch)
+# Shantae Link 0.12 (RetroArch)
+
+0.12: its own launcher icon (the user's Pixel Icon Lab export, in linkapp/res): adaptive, round and themed versions.
+0.11: after 0.10 a friend still saw "isn't responding" about 1 time in 10. A cold start at CPU / 6 in headless Chromium has
+no stall over 170 ms (`linktest.py --stalls 6`), so page load isn't the likely cause. So the card now also shows Android's
+own reason when the last run ended with Close on that dialog (Android 11+): "ANDROID: NO FOCUSED WINDOW" would confirm the
+FLAG_NOT_FOCUSABLE theory below. Not yet run on a device.
+
+0.10: map polling as Xenogears Link's. Position, camera, state and HRAM ("hot" blocks: C300, C900, CB00, FF80) are read
+often, everything else (VRAM above all) less often: map on screen and moving, hot every 50 ms and full every 250 ms; map
+on screen and still, 100 / 200 ms; other tabs, 100 / 300 ms (hot stays at 100 ms or faster because the Select byte is in
+HRAM). Between the page's 100 ms ticks, while she moves on the map, `ShantaeMap.track()` moves the marker and camera without
+touching VRAM. Against the mock with the page's blocks: position rounds 12.6 -> 20 a second, reads 604 -> 255 a second.
+Tested in headless Chromium and against the mock (`tests/ra/RaPace.java`); not measured on a live RetroArch (on Nov 3 the
+Windows RetroArch stopped opening its command port, cause unknown) or a device.
+
+0.9: freeze report, as Xenogears Link 2.0.0.18, for a friend's "isn't responding" dialog while the app worked fine. The
+page tells the app which stage it is in (rom, read, monsters, icons, map, draw, idle); a thread also checks Android's
+main thread. If either stops for 4 s while the app is on screen, the next start shows "THE APP FROZE LAST TIME" and what
+it was doing (tap to close). **The dialog with no report afterwards means nothing stalled**: then the likely cause is
+FLAG_NOT_FOCUSABLE: when Link is the focused app (just opened, or just tapped) and a button is pressed, Android holds the
+key for a window that can never take it and reports the app after about 5 s. Not confirmed on a device. The real fix for
+that would be an overlay window instead of an activity ("Display over other apps"); Xenogears Link has the same flag and
+the same open question. Also from Xenogears: a guard on the map's room size when RAM is read mid-load (the 500-reply limit
+on draining old replies was already here).
 
 0.8: the page from Shantae Dual 0.34, so the Link screen matches Dual's, except auto dance (Dual 0.33-0.34: tap a dance
 in the DANCES pop-up and the app performs it). That needs the emulator to press buttons, so in Shantae Link the pop-up

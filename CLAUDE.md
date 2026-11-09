@@ -1,7 +1,7 @@
 # Shantae Dual — notes for Claude Code
 
 This file is the hand-off. It was written when the project moved from claude.ai to Claude Code at 0.26. Read it
-first. Then read `README.md` for features and history, and `SHANTAE-RAM.md` for everything known about the game's RAM,
+first. Then read `CHANGELOG.md` for features and history (`README.md` is the public GitHub page), and `SHANTAE-RAM.md` for everything known about the game's RAM,
 ROM, objects and script VM.
 
 ## What this is
@@ -25,7 +25,7 @@ app/
     MainActivity.java   Frame loop, input, save slots, the two screens, and the WebView bridges.
                         LinkBridge holds the @JavascriptInterface methods the Link page calls as N.*
     Native.java         JNI declarations
-    Gb.java, GameView.java, TouchPadView.java, DualLayout.java, BezelTheme.java, RomGfx.java, AudioOut.java, VSync.java
+    Gb.java, GameView.java, FrameQueue.java, PanelArrow.java, PanelGeom.java, TouchPadView.java, DualLayout.java, BezelTheme.java, RomGfx.java, AudioOut.java, VSync.java
   assets/link/          Link page (plain JS, canvas):
     link.js             Tabs, panels, ending card, FF button
     map.js              Map and map cards
@@ -36,13 +36,17 @@ app/
     shantae.js, gbgfx.js
   assets/menu/          Launcher and pause menu
   assets/view3d/        Experimental 3D view
-  res/                  Icons (adaptive icon in mipmap-anydpi-v26), made by tools/icon/adaptive.py
+  res/                  Icons: the user's Pixel Icon Lab export (0.36) as ic_launcher*, adaptive + round + monochrome.
+                        Shantae Link's are in linkapp/res, copied over these by its build.
+                        tools/icon/adaptive.py made the old ones: running it would overwrite the new layers
   AndroidManifest.xml   versionCode and versionName
 native/
   gbcore.c/.h           Frontend over gambatte: peek/poke, snapshots, states
   gbjni.c               JNI
   extract.c             First-start extraction (the title music)
+  wide.c                WIDE VIEW: the world around the real picture, ported from the recomp (license in app/assets/licenses), and the spawn window
   drive.c               Desktop test driver (out/host/drive)
+  recomp/               gbcore.h on the Shantae recomp instead of gambatte: the "Shantae Dual Recomp" alpha. See its README.md
   gbglue.cpp, cxxrt.c, jni.map, Makefile
   gambatte-dual.patch   Applied to libretro-gambatte @ 77f2567
 tools/
@@ -84,7 +88,7 @@ make -C native TARGET=host GAMBATTE=$HOME/src/gambatte host     # -> out/host/dr
 **Bump the version on every build.** Change all three:
 - `VERSION` in MainActivity.java
 - `android:versionCode` in AndroidManifest.xml (build_apk.sh syncs versionName)
-- the title line of README.md
+- the title line of CHANGELOG.md (README.md is the public GitHub page: it has no version)
 
 Bump `ASSET_VERSION` in MainActivity.java only when the extraction output changes; that forces a re-extract on the
 device.
@@ -124,6 +128,7 @@ Useful states:
 - Toolchain: system clang 21 (the .so it builds is about 4 KB smaller than 0.26's), android.jar at
   `~/src/platforms/android-33`, sources in `~/src` (bionic, llvm, libcxx, gambatte @ 77f2567 + patch). No ffmpeg on
   PATH (Playwright has one at `~/.cache/ms-playwright/ffmpeg-1013`) and no mgbdis yet.
+- Recomp checkout: `/home/claude/work/recomp/shantaerecomp` (pin d870bd2, with generated/ and roms/). Build with `RECOMP=` that path. Its driver states are in `/home/claude/work/rc` (made by tests/recomptest.py).
 - `linktest.py --standin` still draws the map from real level tiles with the ROM font: check before posting any render.
 
 ## Desktop driver (out/host/drive)
@@ -147,6 +152,8 @@ Commands:
 | `sramsave` / `sramload` | Battery save |
 | `oc 0\|1` | The overclock |
 | `opt key value` | Core option |
+| `view W` | WIDE VIEW's width (160 off); `shot` then saves the whole picture |
+| `wideinfo` | Prints `wide width left top bgout`: the picture's width, where the real picture sits in it, BG object tiles off the real screen |
 | `reset` | Reset |
 | `drops` | Item drops |
 | `echo` | Print text |
@@ -162,13 +169,20 @@ Gotchas:
   - `--time`: timings.
   - `--anim dir`: one shot per dump.
   - The mock must offer every `N.*` method the page calls. Add new bridge methods to the mock string, as `ff` was.
+- `tests/recomptest.py [WORK]`: the recomp backend on out/recomp/host/drive: picture sizes, state repeats, warps, every warp id, reload, sound rate, extraction, menu rows. `DANCE_RECOMP='' tests/dancetest.py`: auto dance on it (`'opt recomp_easy_dance 0;...'` for its options).
+- `tests/widetest.py [OUT]`: WIDE VIEW: what was beside the picture against the real screen after scrolling, the seam, a sprite at the join, BG-drawn objects, spawn window, on/off, cost.
+- `tests/spawntest.py [VIEW]`: every warp place, WIDE VIEW off and on: no object placed by the level may be missing with it on (the spawn window cap).
+- `tests/paneltest.py [OUT]`: SINGLE SCREEN: panel sizes on a desktop JVM, the Link page at the panel's size (whole pixels, taps, a dance closes the panel), the menu row. The slide and the arrow are Android views, not covered.
+- `tests/framequeuetest.py`: FrameQueue on a desktop JVM: double steps and holds when the emulator and UI thread swap order.
 - `tests/dancetest.py`: auto dance: taps each row of the DANCES pop-up, plays the page's N.input string on the driver.
 - `tests/icontest.py [--page DIR]`: the 22 icons the page builds from the ROM against the live inventory screen.
 - `tests/menutest.py`: launcher and pause menu. `tests/preview.py`: the menus with a system font, safe to share.
 - `tests/maptime.py`: map feed timing.
-- `tests/view3dtest.py`: the 3D view.
+- `tests/view3dtest.py`: the 3D view. `tests/view3dsweep.py OUT [--ids 05,14] [--cams ...]`: every warp place in every camera beside
+  the 2D game, contact sheets, codes and overlay per place. `tests/view3dsamples.py OUT`: full-size stills and walking clips.
 - `tests/preview.py`: layouts with stand-in art.
 - `tests/showreel.py OUTDIR [clip...]` and `tests/showreel_clips.py`: the 5-second feature clips and stills (ffmpeg).
+- `tests/showreel_gifs.py OUTDIR [run town compare rocks layout dance]`: the 10-second GIFs of what's new since 0.34 (`Renders/Showreel 0.44`). layout and dance use real game and page frames, with the screen switch, slide and arrow drawn from the Android code's numbers.
 
 ## Standing rules from the user
 - Bump the version on every build.
@@ -247,12 +261,28 @@ list of what doesn't work with RetroArch: `linkapp/README.md`. RAM facts: SHANTA
   one frame count once. Recipes in linkapp/README.md.
 
 ## Open issues / next steps
+- **0.45 to check on the device: Water Town Gates' exits and town door with WIDE VIEW on** (the user's report, Nov 8). Cause: the scanner 00:0FA9 is only run for the screen columns (256 px) the spawn window's edges are in; the 0.37-0.44 window (side + 8 each way, 290 wide on 16:9) could lie across three columns and skip the middle one, so one-screen rooms lost their placed objects. wide.c caps the margin at 48 (SPAWN_MAX, window 256). spawntest.py: 11 places lost objects before, none after. Trade-off: objects wake 40 px past the real screen, not at a 57 px strip's edge.
+- **0.43 WIDE VIEW's new renderer: the user reports "Looks right" on the device (Nov 6).** That was the overall verdict, not an item-by-item check of rocks and blocks, towns, a boss arena locking or dialogue. The user's choice was the recomp's wide rendering only, on gambatte (no translated code ships, so "nothing from the game ships" holds). It replaces the strips of 0.37-0.42. Not ported: the recomp's taller views, room zoom, 157 object slots and object activation; a crowded room can still run out of the game's 32 slots. Width limit 288 (GB_WIDE_MAX).
+- **0.42 SINGLE SCREEN not yet on the device** (MainActivity setPanel/syncPanel, DualLayout's first branch, PanelArrow, PanelGeom; after Xenogears Dual 0.24-0.25's panel, without its 16:9 bars as WIDE VIEW fills the sides). To check: the slide and arrow, the page's whole-pixel size, touches beside the panel reaching the game and touch pad, a controller staying on the game while the panel is touched, the second screen when the layout changes while the game runs. Choices made: the game keeps running under the panel; Select doesn't open it (a dance list is waiting when it's opened by hand); tapping a dance closes it; a spanned Duo is treated as one screen.
+- **Recomp alpha 0.1 (Shantae Dual Recomp, native/recomp) has never run on Android.** Tested on the desktop driver only (tests/recomptest.py, dancetest with DANCE_RECOMP): the library's symbols were checked against the stubs, but the first device run is the real test of loading, speed, GameView's changing picture size. Known limits: the Link map's camera box is still 160 wide; Link only reads the first 32 of the 157 object slots; colours are the recomp's, without the COLORS setting; picture size changes when a dialogue opens (upstream's ui_fit). Not for public release: noncommercial license, and the library is the game's code translated by machine.
+- **The "tear" is fixed: confirmed on the user's device on 0.41 (Nov 6).** It was a vertical line through the barrel while scrolling, at the join: sprites in the strips ran 2 frames ahead of the middle (wide.c gb_wide_track; widetest 1b2, a statue in room 41). The barrel's room wasn't among the warp rooms' arrival stills, so the driver test uses the statue. 0.38 (hand-off through the UI thread), 0.39 (strips follow FRAME BLEND) and 0.40 (FrameQueue) stay in but didn't address this report. On 0.43's new renderer the user saw the line again only with FRAME BLEND on, so 0.44 removed FRAME BLEND (the cause wasn't looked into). The barrel is in the opening stage, map 4B:72 (warp 05), around world x 3300-3640, found on the level data only; poking CB43-46 doesn't move Shantae. **WIDE VIEW** otherwise to check: lining up with
+  the real picture, bosses and ambushes with the wider spawn window. Known limits: rocks and blocks drawn as BG are missing from the
+  strips until on screen; in the 3DS app since 0.15-alpha; not in Shantae Link (can't change RetroArch's picture).
+- **0.36 / Shantae Link 0.12 icons not yet on the device.** native/ctr/Makefile takes the 3DS icon from app/res/mipmap-xhdpi/ic_launcher.png,
+  so the next 3DS build picks up the new Dual icon too.
+- **0.35 3D view rework not yet on the device** (repaint cost especially: about 3 ms on desktop in rooms with animated colours, repainted
+  often). Known leftovers: a top row of 2E over a climbable recess is scenery, so a notch shows in the ledge above (room 09); room 3E's
+  dotted fill makes big grey walls.
 - **0.33 auto dance not yet on the device** (Dual only): tap a dance in the DANCES pop-up. All 11 pass on the driver
   (tests/dancetest.py); not checked with a player holding buttons at the same time.
 - **0.32 / Shantae Link 0.6 not yet on the device**: Shantae back on the SHANTAE tab (from the ROM); Link 0.6 has no
   address setting (always 127.0.0.1:55355).
+- **3DS 0.16-alpha (0.45's spawn window cap) not yet on the device.** Check Water Town Gates' exits and door with WIDE VIEW on.
+- **3DS 0.15-alpha WIDE VIEW runs on the user's New 3DS** (native/ctr/README.md): first reading 60 FPS, GB 8.6 TOP 1.6 LINK 0.8 MAX 17.8 ms, 11.0 of 16.7 ms, room not recorded. Still unlooked-at on the 3DS build: the busiest rooms' timing, towns, boss arenas, dialogue. wide.c's speed work reaches Android at its next build (byte-identical shots on the driver).
+- **3DS 0.14-alpha not yet on the device** (native/ctr): ROM icons, Shantae, auto dance, MONSTERS. Its auto dance joins a
+  running beat after the player's own Select (native/ctr/README.md); Android's danceFor always presses Select, so it should
+  miss the beat after a player's Select. Not yet checked or fixed on Android.
 - **0.31 / Shantae Link 0.5 not yet on the device**: icons built from the ROM (no menu visit needed, unowned ones faded).
-  The 3DS fork (native/ctr) still copies icons from the inventory screen; it could use the same ROM data.
 - **0.30 bestiary not yet on the device**: tested on recorded driver dumps (Spider, Kappa, Ghost lit up), all 46
   pictures decoded on the page, both Dual and RetroArch modes. Shantae Link 0.4 carries it; neither checked on the
   device or on a live RetroArch yet.
@@ -262,9 +292,27 @@ list of what doesn't work with RetroArch: `linkapp/README.md`. RAM facts: SHANTA
   transport, page on live memory, FF, slot stepping) and in headless Chromium.
 
 ## Version history
-Per-version notes are in README.md (feature bullets) and docs/porting-a-dual-app.md (lessons). Latest:
+Per-version notes are in CHANGELOG.md (feature bullets) and docs/porting-a-dual-app.md (lessons). Latest:
+- 0.45: spawn window capped at 256 wide (Water Town Gates' exits and door, and 10 more places).
+- 0.44: FRAME BLEND removed (setting, wide.c's blending and its test). A saved `blend` pref is ignored; the core's option stays `disabled`.
+- 0.43: WIDE VIEW redrawn with the recomp's wide rendering: the app gets one picture instead of a picture and strips (native/wide.c, cpu.cpp's gbx_hook).
+- Shantae Dual Recomp 0.1-alpha: the app on the static recompilation (native/recomp), a separate install. Same Java as Dual: Dual's next build carries Native.view, the larger picture buffers and the app's version() too, and needs its usual bump.
+- 0.42: SINGLE SCREEN layout, an arrow slides Link in over the game.
+- 0.41: WIDE VIEW's strip sprites on the same frame as the middle (the user's vertical line through the barrel).
+- 0.40: FrameQueue: one picture per refresh, oldest first (double step then hold while scrolling).
+- 0.39: WIDE VIEW's strips follow FRAME BLEND (the join broke while scrolling with it on).
+- 0.38: frames reach the screen through the UI thread (tearing with WIDE VIEW).
+- 0.37: WIDE VIEW, the level continues beside the picture on wide screens (native/wide.c, spawn window patched in memory).
+- 0.36 / Shantae Link 0.12: new launcher icons for both apps.
+- 0.35: 3D view engine rework (ramps, cards, one-colour tops and sides, no invisible-wall slabs, town floor, BG overlay).
 - 0.34: dance pop-up header reads TAP TO AUTOMATICALLY PERFORM.
 - 0.33: auto dance (tap a dance in the pop-up; Shantae Dual only).
+- Shantae Link 0.11: the freeze card also shows Android's ANR reason (Close on the dialog, Android 11+). Dialog still ~1 in 10
+  for a friend; page stalls ruled out (under 170 ms at CPU / 6); FLAG_NOT_FOCUSABLE still the suspect.
+- Shantae Link 0.10: map polling as Xenogears Link's (RetroArch.setHot/setPace, ra.js pacing, ShantaeMap.track). Not yet
+  measured live: on Nov 3 the Windows RetroArch opened no command port (network_cmd_enable is on; cause unknown).
+- Shantae Link 0.9: freeze report (N.beat / N.lastHang, as Xenogears Link 2.0.0.18) for a friend's "isn't responding"
+  dialog; open question whether FLAG_NOT_FOCUSABLE causes it (linkapp/README.md).
 - Shantae Link 0.8: the Dual 0.34 page (all of Dual's Link screen except auto dance, which needs N.input).
 - Shantae Link 0.7: works with RetroArch's mGBA core (HRAM read as FF80-FFFE; mock `--core mgba`); checked on a live
   mGBA (mgba_libretro.dll now in C:\RetroArch-Win64\cores; network RetroPad recipe in linkapp/README.md).

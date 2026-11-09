@@ -25,8 +25,7 @@ static long nf;
 static uint16_t th[THUMB_W * THUMB_H];
 static LinkMenu menu = { { 1, 0, 1 }, { th, NULL, NULL }, { "", "", "SCUTTLE TOWN" }, "SAVED TO SLOT 1", 60, 1, 0, 0, 0, 0, 0 };
 static void frames(int n, unsigned pad) {
-    gb_set_pad(pad);
-    for (int i = 0; i < n; i++) { gb_run(); gb_audio(snd, 16384); link_work(&in); if (++nf % 10 == 0) link_border(top, &in); }   /* as main.c */
+    for (int i = 0; i < n; i++) { gb_set_pad(pad | link_dance_pad()); gb_run(); gb_audio(snd, 16384); link_work(&in); if (++nf % 10 == 0) link_border(top, &in); }   /* as main.c */
     gb_set_pad(0);
 }
 
@@ -52,6 +51,10 @@ int main(int argc, char **argv) {
         static uint8_t pb[256]; FILE *pf = fopen(getenv("PREFS"), "rb");
         if (pf) { size_t pn = fread(pb, 1, sizeof pb, pf); fclose(pf); link_prefs_load(pb, pn); printf("prefs %zu bytes: old3ds %d borders %d\n", pn, link_old3ds(-1), link_borders(-1)); }
     }
+    if (getenv("MONS")) {                                      /* MONS=file: the monsters met to start from */
+        static uint8_t mb[LINK_MONSTERS_MAX]; FILE *mf = fopen(getenv("MONS"), "rb");
+        if (mf) { size_t mn = fread(mb, 1, sizeof mb, mf); fclose(mf); link_monsters_load(mb, mn); }
+    }
     LinkIn i0 = { peek, wram, vram, gb_cgbpal, rom, romLen, 0, 60 };
     in = i0;
     static uint16_t fb[LINK_W * LINK_H];
@@ -74,7 +77,8 @@ int main(int argc, char **argv) {
                 int r = link_menu_tap(atoi(p + 2), atoi(strchr(p, ',') + 1), &menu);
                 if (r == MENU_OLD3DS) link_old3ds(!link_old3ds(-1));   /* as main.c */
                 if (r == MENU_FRAMESKIP) link_frameskip(!link_frameskip(-1));
-                printf("menu tap %d,%d -> %d (old3ds %d frameskip %d)\n", atoi(p + 2), atoi(strchr(p, ',') + 1), r, link_old3ds(-1), link_frameskip(-1));
+                if (r == MENU_WIDE) link_wide(!link_wide(-1));
+                printf("menu tap %d,%d -> %d (old3ds %d frameskip %d wide %d)\n", atoi(p + 2), atoi(strchr(p, ',') + 1), r, link_old3ds(-1), link_frameskip(-1), link_wide(-1));
             } else if (p[0] == 'k' && p[1] == ':') {                 /* k:N: 3DS button N (KEY3_*) pressed on the menu */
                 printf("listening %d, button %d ->", link_menu_listening(), atoi(p + 2)); link_menu_bind(atoi(p + 2));
                 for (int a = 0; a < ACT_N; a++) printf(" %d", link_key(a));
@@ -88,6 +92,12 @@ int main(int argc, char **argv) {
         }
     }
     link_draw(fb, &in);
+    /* for the tests: the player's cel bank (node 0 +$2E: after a transformation dance, Monkey 60, Elephant 6F, Spider 77,
+       Harpy 70), and the monsters met (MONS=file also loads and saves them) */
+    { static uint8_t mb[LINK_MONSTERS_MAX]; size_t mn = link_monsters_save(mb, sizeof mb); int met = 0;
+      if (mn) for (int i = 0; i < 46; i++) met += mb[4 + i];
+      printf("cel bank %02X, hearts %d, %s, %s %d monsters\n", gb_wram(3, 0x2E), gb_peek(0xCA80), link_place(&in), mn ? "new:" : "none new,", met);
+      if (mn && getenv("MONS")) { FILE *mf = fopen(getenv("MONS"), "wb"); if (mf) { fwrite(mb, 1, mn, mf); fclose(mf); } } }
     f = fopen(argv[3], "wb");
     fprintf(f, "P6 %d %d 255\n", LINK_W, LINK_H);
     for (int i = 0; i < LINK_W * LINK_H; i++) {

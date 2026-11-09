@@ -101,23 +101,39 @@
       sub('CONTROLS', 'controls');
       sub('SOUND', 'sound');
       sub('GAMEPLAY', 'gameplay');
+      if (info.recomp) sub('RECOMP', 'recomp');
       sub('SYSTEM', 'system');
+      backRow();
+    } else if (page === 'recomp') {               // the recomp's changes to the game, on as upstream has them
+      [['input_lag', 'LESS INPUT LAG'], ['smooth_moves', 'SMOOTH MOVES'], ['air_speed', 'AIR SPEED B'], ['fast_crawl', 'FAST CRAWL'],
+       ['smooth_forms', 'SMOOTH FORMS'], ['easy_dance', 'EASY DANCE'], ['quick_steps', 'QUICK STEPS'], ['safe_transform', 'SAFE TRANSFORM']].forEach(function (o) {
+        var k = 'rc_' + o[0];
+        opt(o[1], onoff(s[k] !== false), function () { set(k, !(s[k] !== false)); });
+      });
+      opt('WHIP MOVING', { 0: 'ORIGINAL', 1: 'SLIDE', 2: 'CANCEL' }[s.rc_whip] || 'SLIDE', function (d) { cycle('rc_whip', ['0', '1', '2'], d); });
+      opt('TEXT', { 0: 'ORIGINAL', 10: 'INSTANT' }[s.rc_text_speed] || 'INSTANT', function (d) { cycle('rc_text_speed', ['0', '10'], d); });
       backRow();
     } else if (page === 'display') {
       opt('SHAPE', { square: '10:9', stretch: 'STRETCH' }[s.aspect] || '10:9', function (d) { cycle('aspect', ['square', 'stretch'], d); });
       opt('INTEGER SCALE', onoff(s.integer), function () { set('integer', !s.integer); });
-      opt('COLORS', { lcd: 'GBC LCD', vivid: 'VIVID' }[s.color] || 'GBC LCD', function (d) { cycle('color', ['lcd', 'vivid'], d); });
-      opt('FRAME BLEND', { off: 'OFF', mix: 'MIX', ghost: 'LCD GHOSTING' }[s.blend] || 'OFF', function (d) { cycle('blend', ['off', 'mix', 'ghost'], d); });
-      opt('ALL SPRITES', onoff(s.allSprites !== false), function () { set('allSprites', !(s.allSprites !== false)); });
+      if (!info.recomp) {                               // gambatte's: the recomp draws its own way
+        opt('COLORS', { lcd: 'GBC LCD', vivid: 'VIVID' }[s.color] || 'GBC LCD', function (d) { cycle('color', ['lcd', 'vivid'], d); });
+        opt('ALL SPRITES', onoff(s.allSprites !== false), function () { set('allSprites', !(s.allSprites !== false)); });
+      }
+      if (!info.linux) opt('WIDE VIEW', onoff(s.wideView !== false), function () { set('wideView', !(s.wideView !== false)); });
+      if (info.recomp) opt('VIEW SIZE', { 144: 'NORMAL', 180: 'LARGER', 216: 'LARGEST' }[s.viewRows] || 'NORMAL', function (d) { cycle('viewRows', ['144', '180', '216'], d); });
       if (!info.linux) opt('16:9 BORDERS', onoff(s.bezels), function () { set('bezels', !s.bezels); });
       opt('SHOW FPS', onoff(s.stats), function () { set('stats', !s.stats); });
       backRow();
     } else if (page === 'screens') {
-      if (!info.linux) opt('SPLIT', { auto: 'AUTO', off: 'OFF', lr: 'SIDE BY SIDE', tb: 'TOP + BOTTOM' }[s.split] || 'AUTO', function (d) { cycle('split', ['auto', 'off', 'lr', 'tb'], d); });
-      if (!info.linux && (s.split === 'lr' || s.split === 'tb')) opt('HINGE GAP', (s.gap || 0) + 'DP', function (d) { cycle('gap', ['0', '16', '26', '34', '40'], d); });
-      opt('SWAP SCREENS', onoff(s.swap), function () { set('swap', !s.swap); });
-      if (!info.linux) opt('LINK SIDE PANEL', onoff(s.side), function () { set('side', !s.side); });
-      if (!info.linux) opt('SECOND DISPLAY', onoff(s.useExternal), function () { set('useExternal', !s.useExternal); });
+      if (!info.linux) opt('LAYOUT', { second: 'SECOND SCREEN', single: 'SINGLE SCREEN' }[s.layout] || 'SECOND SCREEN', function (d) { cycle('layout', ['second', 'single'], d); });
+      if (info.linux || s.layout !== 'single') {        // on one screen the rest don't apply
+        if (!info.linux) opt('SPLIT', { auto: 'AUTO', off: 'OFF', lr: 'SIDE BY SIDE', tb: 'TOP + BOTTOM' }[s.split] || 'AUTO', function (d) { cycle('split', ['auto', 'off', 'lr', 'tb'], d); });
+        if (!info.linux && (s.split === 'lr' || s.split === 'tb')) opt('HINGE GAP', (s.gap || 0) + 'DP', function (d) { cycle('gap', ['0', '16', '26', '34', '40'], d); });
+        opt('SWAP SCREENS', onoff(s.swap), function () { set('swap', !s.swap); });
+        if (!info.linux) opt('LINK SIDE PANEL', onoff(s.side), function () { set('side', !s.side); });
+        if (!info.linux) opt('SECOND DISPLAY', onoff(s.useExternal), function () { set('useExternal', !s.useExternal); });
+      }
       backRow();
     } else if (page === 'controls') {
       if (!info.linux) opt('TOUCH PAD', String(s.touch || 'auto').toUpperCase(), function (d) { cycle('touch', ['auto', 'on', 'off'], d); });

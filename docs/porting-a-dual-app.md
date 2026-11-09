@@ -554,6 +554,31 @@ Reuse this base for the next GBC game. Source zip has README.md + SHANTAE-RAM.md
   0.32 did the same for the menu's character portrait: search the ROM for the live BG map as (tile, attribute) words and
   for each palette, and decode the menu's sprite objects with the game's cel format. Once one screen's art is found in
   the ROM, the rest of that screen is usually stored next to it (here map and palettes sat right after each other).
+- **Shantae Dual 0.37 (Nov 6) - a wider picture without touching the game's camera:**
+  - *The real frame stays; the extra is drawn beside it.* If the level is readable from the ROM (the map and 3D view already do it), side strips cost almost nothing (0.04 ms a frame on a desktop debug build) and live VRAM and palettes keep them in step with fades and animation.
+  - *Off-screen objects need two things:* they must exist (find the spawn window, here two immediates in ROM bank 1, patched in the core's copy so save states and the file are untouched and it can be switched live) and be drawable (node position + sprite cels from the ROM).
+  - *Keep the spawn window inside the despawn window,* or objects flicker in and out.
+  - *Frame-end state is already the next frame:* compare nodes to the shadow OAM just written, not the live OAM, or a correct decoder scores near 0% while walking.
+  - *Don't write a Bitmap from the emulation thread (0.38):* the render thread reads it on its own schedule, so a large bitmap written each frame could tear on the device though every frame is right on the desktop. Hand over pixels in a buffer and copy them into the Bitmap on the UI thread, in onDraw. (Sound practice, but it wasn't this report's cause: see the next point.)
+  - *Anything drawn beside the core's picture has to go through the core's post-processing too (0.39):* FRAME BLEND was on, so the middle doubled while scrolling and the strips stayed sharp. Reported as "tearing". The driver tests all ran with the setting off, so they passed.
+  - *Widening a game's spawn window can break what's built on its narrowness (0.45):* Shantae reads the object lists of only the screen columns its window's edges fall in. Past one column wide it skipped the middle column, and one-screen rooms lost their exits and doors. Check every place for objects that are missing with the change on, not only that more appear.
+  - *Drop a display option that a game has no use for (0.44):* Shantae's frames are all complete, so FRAME BLEND only added ghosting, and every feature drawn beside the picture then had to match it. Removing it was better than keeping it in step.
+  - *A slide-in companion doesn't need a see-through page (0.42):* Xenogears Dual puts its panel and arrow inside a full-screen transparent page, with a pane passing touches through and the page reporting its sizes back. With no side bars to draw, ordinary views are simpler: the page's pane sits just off the right edge (still running, so it keeps up) and slides with setTranslationX; the arrow is its own small view; anything not on them reaches the game by itself. Size the page in whole screen pixels so a pixel font stays even.
+  - *Get the player to point at the fault first (0.41):* three builds went on theories about a "tear" before "look at the barrel, a vertical line wipes it". It was the join in the player's own recording all along: sprites beside the picture were 2 frames ahead. Ask what it looks like and where before measuring.
+  - *Test what's drawn beside the picture with something big and static, in world coordinates:* the level strips were exact, and the sprites' check (cels against shadow OAM) passed, because neither looks at when they appear on screen.
+  - *Emulator and UI thread both waking on vsync race each other (0.40):* with "latest picture wins", a draw just before the emulator finishes repeats a frame and the next skips one. Check the recording's frame times: a double step at a normal 16 ms gap is the app, at 33 ms it's the recorder. A two-slot queue, one picture per draw, removes it for at most one frame of delay.
+  - *A screen recording can't show a tear in the panel.* Ask for a phone-camera video too.
+  - *Ask for a screen recording before theorising about a display bug:* per-frame numbers from it (moves per region, colour counts per region) showed the difference between a real tear and a blend straight away. Test with the player's settings as well as the defaults.
+  - *Test the seam itself, not just later frames:* find the camera offset that makes the level match the real picture on each frame while scrolling.
+  - *Best test: predict the future.* Render the strip, walk until it has scrolled on screen, compare pixels with the real picture. Exclude colour cycling.
+- **Shantae Dual 0.35 (Nov 3) - a 3D view that reads what the collision means:**
+  - *Sweep before fixing:* warp to every place and sheet the 2D game beside each camera; most "weird" things showed up within a few sheets, none needed playing.
+  - *Label the codes on the level picture.* One crop per code with its hex over each cell told slopes, ceilings, climbables, hazards and invisible walls apart in minutes, without reading the collision code in the ROM.
+  - *Fill from what's there:* one-way tops get a body only if the same palette reaches something solid (crates). Otherwise tree branches become stacked slabs.
+  - *Never stretch a tile's edge pixels across a face:* one row of a tile, tile by tile, gave zebra stripes and black streaks. A colour band under the level texture (one colour per run for tops, each tile's average lit colour for sides) looks far calmer.
+  - *Solid isn't always visible:* drop blocks for cells in the sky colour or mostly sky, cells whose tile the room mostly uses as open background, and walls at a big room's ends.
+  - *Compare the level to the live BG map on screen:* anything that differs for a few frames (blocks the game draws as BG) goes on the sprite plane. Walking checks showed no false hits while scrolling.
+  - *Watch for helper names shadowing state:* a local `V(py)` in the mesh silently turned `V.rw` into undefined and every bounds check into false.
 - **Shantae Dual 0.33 (Nov 2) - auto dance from a measured beat:** before reading any dance code, sweep press timings
   on the desktop driver (input k at frame a + P*k after the trigger, check the player's cel bank). The beat turned out
   to start from the Select press, not the music, so one fixed schedule (18 + 64k frames, about 24 frames of slack)
@@ -595,6 +620,14 @@ Reuse this base for the next GBC game. Source zip has README.md + SHANTAE-RAM.md
     Size every block to the smallest descriptor any supported core uses, and note that RetroArch ignores a failed
     `mmap_preprocess_descriptors` (mGBA's select-less $6000 WRAM 2-7 block): later descriptors keep the core's values
     and match as plain ranges. Port each core's `_setupMaps` into the mock and run the page tests per core.
+  - *"Isn't responding" while the app works (Link 0.9):* Android's dialog is about input, not drawing. A Link app's
+    FLAG_NOT_FOCUSABLE window can be the focused app with no focused window, and a key press then waits about 5 s and
+    reports the app (not yet confirmed on a device). Tell the causes apart first: a freeze report (page stage + Android
+    main thread, 4 s watchdog, shown on the next start). Dialog and no report = nothing stalled.
+  - *Poll by what changes (Link 0.10, from Xenogears Link):* a few hot blocks (position, camera, state, joypad) every
+    50-100 ms, the rest every 200-300 ms, and a light map update that moves only the marker and camera between full ones.
+    Position updates went from 12.6 to 20 a second while total reads fell from 604 to 255 a second. Keep the joypad block
+    hot on every tab if anything reacts to a button.
   - *Keep the page shared:* one adapter (ra.js) builds the same `window.Native` the Dual app has, on a dumb Java
     transport (`read("addr:len,...")` from a cache the poll thread fills). The page only needs an `RA` flag for the
     setup screen and a few option rows, and the same page tests run in both modes.
@@ -747,3 +780,43 @@ Reuse this base for the next GBA game. Source zip has README.md + RAM-MAP.md.
   ~8% of the instructions.
 - **Azahar's tick counter counts emulated instructions** (no cache stalls), so it ranks code changes well but reads
   about half the device's time (11.3 vs 24.0 ms).
+
+## Pressing buttons for the player: test from every way in (Shantae Dual 3DS 0.14, Nov 6 2026)
+- **An auto-input feature has to allow for what the player already started.** Auto dance presses Select, then the inputs
+  on the beat. Tested from the list's button it passed all 11; opened the usual way (the player's Select pops the list up)
+  it failed at every wait from 5 to 600 frames: the beat was already running, the second Select did nothing, and the
+  inputs fell off the beat. The fix was to measure the game's rule (any later beat takes the dance) and join it.
+- **When a test fails at every value, sweep the wait before the theory.** One table of "wait W -> result" showed it wasn't
+  a timeout, and the next one (input on beat n) showed what to do.
+
+## Moving a Dual app onto a static recompilation (Shantae Dual Recomp 0.1-alpha, Nov 6 2026)
+- **Keep the frontend's core API small and it pays off here.** The driver, JNI, extraction and Link page all sat on
+  `gbcore.h`, so swapping gambatte for a recompiled game was one new file (`native/recomp/gbcore_recomp.c`) and a Makefile.
+  Tests that read memory, like Link's, then passed unchanged on the new core's dumps.
+- **Read memory from the arrays, not through the game's read path.** The recomp's view hooks show some routines a
+  widened camera; a companion reading through them would see values the game doesn't hold.
+- **A shared library links fine with symbols that won't resolve.** The stub sysroot let `atexit` through, and bionic's
+  libc.so doesn't export it (the NDK's crt does), so the library would have failed to load on the device. After any new
+  native code, compare `llvm-nm -D --undefined-only` against what libc really exports.
+- **"The state changed" isn't "it worked": look at the picture.** The first warp test passed on RAM values while the
+  screen sat frozen on the old room. The cause was one flag (interrupts off where gambatte's jump turns them on). Compare
+  a before and an after picture, and check a value the new scene sets, not the ones the warp itself pokes.
+- **A sweep on one core needs the other to judge it.** Three warps came up black; two are black on gambatte too, and the
+  third was the test's own button presses.
+- **Check what the build really ships.** Random 32-byte pieces of the ROM searched for in the library: none. It still
+  holds the game's code, translated: decide about distribution knowing that, and read the upstream license first.
+- **Recomp upstreams change the game by default.** Input lag, movement and text speed were all on here. Say so, and put
+  them behind settings, rather than pass them off as the original.
+
+## Taking a recomp's rendering without its translated code (Shantae Dual 0.43, Nov 6 2026)
+- **A recomp's enhancements are usually hand-written modules hooked into the game, and they can leave.** Shantae's wide view was hooks at about 11 addresses plus a renderer. The 71 MB of translated code wasn't part of it. Ask what the feature reads, not what it runs on.
+- **Copy the method, then cut what isn't needed.** Sprites from the game's own list at the point it builds them replaced three versions of working out timing from object nodes (0.37-0.41), and frame alignment stopped being a thing to measure.
+- **A PC hook table costs little and stays out of the way.** A flag read once per run of the CPU and a bit test before each opcode, on only while the feature is: 0.06-0.1 ms a frame on the desktop driver, all in.
+- **Read each hook's address against the ROM.** A recomp's "generated PC" can be the next instruction's. Eleven hooks, each checked by its bytes, and one (00:1DC6) was the instruction itself.
+- **A test that says all pixels differ may be a test bug.** FRAME BLEND "mix" failed everywhere in the middle too, the part this change doesn't touch. The `shot` command widens 5-bit colour differently from the test's helper.
+
+## A desktop cost doesn't carry to ARM (Shantae Dual 3DS 0.15-alpha, Nov 6 2026)
+- **Measure on the target's emulator before believing a ratio.** WIDE VIEW was about 20% of a Game Boy frame on the desktop and about 45% in Azahar. A `powf` behind a colour call and 64-bit shifts on a 32-bit CPU don't show up on x86.
+- **Don't draw what the next step overwrites.** The renderer drew the whole level, then pasted the real picture over the middle 60% of it. Skipping that was most of the gain, and the output stayed byte-identical.
+- **Keep the old binary while speeding up.** Shots of the same play from before and after, compared byte for byte, make a rewrite of a renderer safe to do in an afternoon.
+- **A new setting that's on by default needs care in a raw struct file.** Older files hold padding zeros there, so store the setting as its opposite.

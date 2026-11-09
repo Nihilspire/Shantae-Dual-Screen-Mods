@@ -17,6 +17,14 @@ public final class Native {
     public static native void setOverclock(boolean on);
     /** Runs one frame; returns (w << 16 | h) when a new picture was copied into dst. */
     public static native int runFrame(int pad, ByteBuffer dst);
+    public static final int WIDE_MAX = 64;
+    /** Which core this library holds: 0 gambatte, 1 the static recompilation (native/recomp). */
+    public static native int backend();
+    /** WIDE VIEW: the size of picture to draw (the world at the original's zoom); runFrame's size follows, except on menus
+     *  and one-screen rooms (160 x 144). 160 is off. Gambatte goes to 160 + 2 * WIDE_MAX wide and ignores the height. Between frames,
+     *  on the emu thread. */
+    public static native void view(int width, int height);
+    public static final int PIC_W = 512, PIC_H = 288;
     public static native int audio(short[] out);
     /** CPU view ($0000-$FFFF, current banks), no side effects. */
     public static native int peek(int addr);

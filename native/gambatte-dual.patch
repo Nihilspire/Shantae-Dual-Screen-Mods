@@ -48,10 +48,10 @@ index 15b042c..1a10b24 100644
     if (blend_frames)
        blend_frames();
 diff --git a/libgambatte/src/cpu.cpp b/libgambatte/src/cpu.cpp
-index 0fb6199..336e7e4 100644
+index 0fb6199..4211bae 100644
 --- a/libgambatte/src/cpu.cpp
 +++ b/libgambatte/src/cpu.cpp
-@@ -135,18 +135,33 @@ void CPU::loadState(SaveState const &state) {
+@@ -135,18 +135,36 @@ void CPU::loadState(SaveState const &state) {
  // time they were written GCC had a tendency to not be able to keep hot variables
  // in regs if you took an address/reference in an inline function.
  
@@ -72,6 +72,9 @@ index 0fb6199..336e7e4 100644
 -#define WRITE(addr, data) do { mem_.write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
 -#define FF_WRITE(addr, data) do { mem_.ff_write(addr, data, cycleCounter); cycleCounter += 4; } while (0)
 +#define READ(dest, addr) do { (dest) = mem_.read(addr, cycleCounter); cycleCounter += GBX_M; } while (0)
++/* Dual: WIDE VIEW's hooks at a few addresses in the game's own drawing code (native/wide.c). */
++extern "C" { unsigned char gbx_hookbits[8192]; int gbx_hook_on = 0; }
++extern "C" void gbx_hook(unsigned pc, unsigned bank, unsigned bc, unsigned de, unsigned hl, unsigned sp);
 +#define PC_READ(dest) do { (dest) = mem_.read(pc, cycleCounter); pc = (pc + 1) & 0xFFFF; cycleCounter += GBX_M; } while (0)
 +#define FF_READ(dest, addr) do { (dest) = mem_.ff_read(addr, cycleCounter); cycleCounter += GBX_M; } while (0)
 +
@@ -92,7 +95,7 @@ index 0fb6199..336e7e4 100644
  
  #define PUSH(r1, r2) do { \
  	sp = (sp - 1) & 0xFFFF; \
-@@ -300,7 +315,7 @@ void CPU::loadState(SaveState const &state) {
+@@ -300,7 +318,7 @@ void CPU::loadState(SaveState const &state) {
  // Push value of register pair onto stack:
  #define push_rr(r1, r2) do { \
  	PUSH(r1, r2); \
@@ -101,7 +104,7 @@ index 0fb6199..336e7e4 100644
  } while (0)
  
  // pop rr (12 cycles):
-@@ -418,7 +433,7 @@ void CPU::loadState(SaveState const &state) {
+@@ -418,7 +436,7 @@ void CPU::loadState(SaveState const &state) {
  	hf2 = (cf & 0x100) | (rh); \
  	cf = h + (cf >> 8) + (rh); \
  	h = cf & 0xFF; \
@@ -110,7 +113,7 @@ index 0fb6199..336e7e4 100644
  } while (0)
  
  // inc rr (8 cycles):
-@@ -427,7 +442,7 @@ void CPU::loadState(SaveState const &state) {
+@@ -427,7 +445,7 @@ void CPU::loadState(SaveState const &state) {
  	unsigned const lowinc = (rl) + 1; \
  	(rl) = lowinc & 0xFF; \
  	(rh) = ((rh) + (lowinc >> 8)) & 0xFF; \
@@ -119,7 +122,7 @@ index 0fb6199..336e7e4 100644
  } while (0)
  
  // dec rr (8 cycles):
-@@ -436,7 +451,7 @@ void CPU::loadState(SaveState const &state) {
+@@ -436,7 +454,7 @@ void CPU::loadState(SaveState const &state) {
  	unsigned const lowdec = (rl) - 1; \
  	(rl) = lowdec & 0xFF; \
  	(rh) = ((rh) - (lowdec >> 8 & 1)) & 0xFF; \
@@ -128,7 +131,7 @@ index 0fb6199..336e7e4 100644
  } while (0)
  
  #define sp_plus_n(sumout) do { \
-@@ -448,7 +463,7 @@ void CPU::loadState(SaveState const &state) {
+@@ -448,7 +466,7 @@ void CPU::loadState(SaveState const &state) {
  	cf = sp ^ disp ^ res; \
  	hf2 = cf << 5 & hf2_hcf; \
  	zf = 1; \
@@ -137,17 +140,20 @@ index 0fb6199..336e7e4 100644
  	(sumout) = res & 0xFFFF; \
  } while (0)
  
-@@ -501,6 +516,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -501,6 +519,8 @@ void CPU::process(unsigned long const cycles) {
  
  	unsigned char a = a_;
  	unsigned long cycleCounter = cycleCounter_;
 +	unsigned const gbxOc = gbx_overclock;
++	int const gbxHook = gbx_hook_on;     /* gb_view only changes it between frames */
  
  	while (mem_.isActive()) {
  		unsigned short pc = pc_;
-@@ -518,6 +534,9 @@ void CPU::process(unsigned long const cycles) {
+@@ -517,7 +537,11 @@ void CPU::process(unsigned long const cycles) {
+ 		} else while (cycleCounter < mem_.nextEventTime()) {
  			unsigned char opcode;
  
++			if (gbxHook && (gbx_hookbits[pc >> 3] >> (pc & 7) & 1)) gbx_hook(pc, mem_.rombank(), b << 8 | c, d << 8 | e, hl(), sp);
  			PC_READ(opcode);
 +#ifdef GBX_TRACE
 +			if (gbx_pctrace_on) gbx_pctrace(pc - 1, mem_.rombank(), opcode, a, hl(), de());
@@ -155,7 +161,7 @@ index 0fb6199..336e7e4 100644
  
  			if (skip_) {
  				pc = (pc - 1) & 0xFFFF;
-@@ -838,7 +857,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -838,7 +862,7 @@ void CPU::process(unsigned long const cycles) {
  
  			case 0x33:
  				sp = (sp + 1) & 0xFFFF;
@@ -164,7 +170,7 @@ index 0fb6199..336e7e4 100644
  				break;
  
  				// inc (hl) (12 cycles):
-@@ -906,7 +925,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -906,7 +930,7 @@ void CPU::process(unsigned long const cycles) {
  				cf >>= 8;
  				cf += h;
  				h = cf & 0xFF;
@@ -173,7 +179,7 @@ index 0fb6199..336e7e4 100644
  				break;
  
  				// ldd a,(hl) (8 cycles):
-@@ -915,7 +934,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -915,7 +939,7 @@ void CPU::process(unsigned long const cycles) {
  				{
  					unsigned addr = hl();
  					a = mem_.read(addr, cycleCounter);
@@ -182,7 +188,7 @@ index 0fb6199..336e7e4 100644
  
  					addr = (addr - 1) & 0xFFFF;
  					l = addr;
-@@ -926,7 +945,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -926,7 +950,7 @@ void CPU::process(unsigned long const cycles) {
  
  			case 0x3B:
  				sp = (sp - 1) & 0xFFFF;
@@ -191,7 +197,7 @@ index 0fb6199..336e7e4 100644
  				break;
  
  			case 0x3C:
-@@ -1013,7 +1032,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1013,7 +1037,7 @@ void CPU::process(unsigned long const cycles) {
  					&& (   mem_.ff_read(0x0F, cycleCounter)
  					     & mem_.ff_read(0xFF, cycleCounter) & 0x1F)) {
  					if (mem_.isCgb())
@@ -200,7 +206,7 @@ index 0fb6199..336e7e4 100644
  					else
  						skip_ = true;
  				} else {
-@@ -1135,7 +1154,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1135,7 +1159,7 @@ void CPU::process(unsigned long const cycles) {
  				// ret nz (20;8 cycles):
  				// Pop two bytes from the stack and jump to that address, if ZF is unset:
  			case 0xC0:
@@ -209,7 +215,7 @@ index 0fb6199..336e7e4 100644
  
  				if (zf & 0xFF)
  					ret();
-@@ -1153,7 +1172,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1153,7 +1177,7 @@ void CPU::process(unsigned long const cycles) {
  					jp_nn();
  				} else {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -218,7 +224,7 @@ index 0fb6199..336e7e4 100644
  				}
  
  				break;
-@@ -1170,7 +1189,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1170,7 +1194,7 @@ void CPU::process(unsigned long const cycles) {
  					call_nn();
  				} else {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -227,7 +233,7 @@ index 0fb6199..336e7e4 100644
  				}
  
  				break;
-@@ -1194,7 +1213,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1194,7 +1218,7 @@ void CPU::process(unsigned long const cycles) {
  				// ret z (20;8 cycles):
  				// Pop two bytes from the stack and jump to that address, if ZF is set:
  			case 0xC8:
@@ -236,7 +242,7 @@ index 0fb6199..336e7e4 100644
  
  				if (!(zf & 0xFF))
  					ret();
-@@ -1212,7 +1231,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1212,7 +1236,7 @@ void CPU::process(unsigned long const cycles) {
  			case 0xCA:
  				if (zf & 0xFF) {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -245,7 +251,7 @@ index 0fb6199..336e7e4 100644
  				} else {
  					jp_nn();
  				}
-@@ -1642,7 +1661,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1642,7 +1666,7 @@ void CPU::process(unsigned long const cycles) {
  			case 0xCC:
  				if (zf & 0xFF) {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -254,7 +260,7 @@ index 0fb6199..336e7e4 100644
  				} else {
  					call_nn();
  				}
-@@ -1669,7 +1688,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1669,7 +1693,7 @@ void CPU::process(unsigned long const cycles) {
  				// ret nc (20;8 cycles):
  				// Pop two bytes from the stack and jump to that address, if CF is unset:
  			case 0xD0:
@@ -263,7 +269,7 @@ index 0fb6199..336e7e4 100644
  
  				if (!(cf & 0x100))
  					ret();
-@@ -1685,7 +1704,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1685,7 +1709,7 @@ void CPU::process(unsigned long const cycles) {
  			case 0xD2:
  				if (cf & 0x100) {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -272,7 +278,7 @@ index 0fb6199..336e7e4 100644
  				} else {
  					jp_nn();
  				}
-@@ -1701,7 +1720,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1701,7 +1725,7 @@ void CPU::process(unsigned long const cycles) {
  			case 0xD4:
  				if (cf & 0x100) {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -281,7 +287,7 @@ index 0fb6199..336e7e4 100644
  				} else {
  					call_nn();
  				}
-@@ -1728,7 +1747,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1728,7 +1752,7 @@ void CPU::process(unsigned long const cycles) {
  				// ret c (20;8 cycles):
  				// Pop two bytes from the stack and jump to that address, if CF is set:
  			case 0xD8:
@@ -290,7 +296,7 @@ index 0fb6199..336e7e4 100644
  
  				if (cf & 0x100)
  					ret();
-@@ -1754,7 +1773,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1754,7 +1778,7 @@ void CPU::process(unsigned long const cycles) {
  					jp_nn();
  				} else {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -299,7 +305,7 @@ index 0fb6199..336e7e4 100644
  				}
  
  				break;
-@@ -1770,7 +1789,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1770,7 +1794,7 @@ void CPU::process(unsigned long const cycles) {
  					call_nn();
  				} else {
  					PC_MOD((pc + 2) & 0xFFFF);
@@ -308,7 +314,7 @@ index 0fb6199..336e7e4 100644
  				}
  
  				break;
-@@ -1835,7 +1854,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1835,7 +1859,7 @@ void CPU::process(unsigned long const cycles) {
  				// Add next (signed) byte in memory to SP, reset ZF and SF, check HCF and CF:
  			case 0xE8:
  				sp_plus_n(sp);
@@ -317,7 +323,7 @@ index 0fb6199..336e7e4 100644
  				break;
  
  				// jp hl (4 cycles):
-@@ -1952,7 +1971,7 @@ void CPU::process(unsigned long const cycles) {
+@@ -1952,7 +1976,7 @@ void CPU::process(unsigned long const cycles) {
  				// Put value in HL into SP
  			case 0xF9:
  				sp = hl();

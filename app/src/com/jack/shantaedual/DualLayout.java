@@ -17,6 +17,8 @@ import java.util.List;
  *  - Split forced in settings ("lr"/"tb"): halves of the window.
  *  - Second display (handheld with two screens, external monitor): Link goes to a Presentation; game fills this window.
  *  - Single screen: game fills the window (16:9 borders around it); optional Link side panel or full overlay.
+ *  - LAYOUT: SINGLE SCREEN, chosen in settings, ahead of all of the above: the game fills the window, and an arrow on its right edge
+ *    slides Link in over it (MainActivity.setPanel). On a spanned Duo the window is treated as one screen.
  */
 final class DualLayout extends ViewGroup {
     final MainActivity act;
@@ -32,12 +34,14 @@ final class DualLayout extends ViewGroup {
     // centred on the hinge and the Link page running off the bottom on a spanned Surface Duo.)
     private Rect gRect = new Rect(), kRect;
     private int linkMode;          // 0 hidden, 1 in its own pane, 2 overlay over everything
+    int panelW;                    // SINGLE SCREEN: the panel's width; 0 in the other layouts
 
     @Override protected void onMeasure(int ws, int hs) {
         int w = MeasureSpec.getSize(ws), h = MeasureSpec.getSize(hs);
         setMeasuredDimension(w, h);
         compute(w, h);
         measurePane(act.gamePane, gRect.width(), gRect.height());
+        measurePane(act.panelArrow, PanelGeom.arrowW(w, h), PanelGeom.arrowH(w, h));
         if (linkMode == 1) measurePane(act.linkPane, kRect.width(), kRect.height());
         else if (linkMode == 2) measurePane(act.linkPane, w, h);
         else measurePane(act.linkPane, 0, 0);
@@ -55,10 +59,23 @@ final class DualLayout extends ViewGroup {
         if (linkMode == 1) { if (link.getVisibility() != VISIBLE) link.setVisibility(VISIBLE); link.layout(kRect.left, kRect.top, kRect.right, kRect.bottom); }
         else if (linkMode == 2) { if (link.getVisibility() != VISIBLE) link.setVisibility(VISIBLE); link.layout(0, 0, W, H); }
         else { if (link.getVisibility() != GONE) link.setVisibility(GONE); link.layout(0, 0, 0, 0); }
+        int aw = PanelGeom.arrowW(W, H), ah = PanelGeom.arrowH(W, H);
+        act.panelArrow.layout(W - aw, (H - ah) / 2, W, (H - ah) / 2 + ah);
         act.setHud();
+        act.syncPanel();
     }
 
     private void compute(int W, int H) {
+        panelW = 0;
+        if (act.singleScreen()) {
+            hinge = null; split = 0; side = false; hingeSource = "";
+            panelW = PanelGeom.width(W, H);
+            gRect = new Rect(0, 0, W, H);
+            kRect = new Rect(W - panelW, 0, W, H);
+            linkMode = 1;
+            how = "panel";
+            return;
+        }
         String mode = act.prefs.getString("split", "auto");
         boolean swap = act.prefs.getBoolean("swap", false);
         hinge = null; split = 0; side = false;

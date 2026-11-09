@@ -45,6 +45,8 @@ EXPORT jint J(runFrame)(JNIEnv *e, jclass c, jint pad, jobject dst) {
   memcpy(d, fb, (size_t)w * h * 2);
   return (w << 16) | h;
 }
+EXPORT jint J(backend)(JNIEnv *e, jclass c) { return gb_backend(); }
+EXPORT void J(view)(JNIEnv *e, jclass c, jint width, jint height) { gb_view(width, height); }
 EXPORT jint J(audio)(JNIEnv *e, jclass c, jshortArray out) {
   int max = (*e)->GetArrayLength(e, out); if (max > 16384) max = 16384;
   int n = gb_audio(abuf, max);

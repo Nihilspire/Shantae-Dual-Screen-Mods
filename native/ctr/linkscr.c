@@ -7,11 +7,11 @@
 #include "linkscr.h"
 
 #define RGB(r, g, b) (uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
-enum { BG, PANEL, SEL, INK, WHITE, GREY, LGREY, GOLD, GREEN, RED, HEART, HEART0, GEM, PURPLE, TEAL, DPURPLE, BLACK, NCOL };
+enum { BG, PANEL, SEL, INK, WHITE, GREY, LGREY, GOLD, GREEN, RED, HEART, HEART0, GEM, PURPLE, TEAL, DPURPLE, BLACK, DARK1, DARK2, LINE1, LINE2, DRED, NCOL };
 static const uint16_t COL[NCOL] = {
     RGB(12, 4, 24), RGB(30, 12, 44), RGB(90, 42, 120), RGB(248, 224, 112), RGB(248, 240, 224), RGB(136, 120, 152),
     RGB(200, 184, 216), RGB(248, 192, 72), RGB(120, 224, 152), RGB(224, 88, 74), RGB(248, 88, 120), RGB(90, 48, 72),
-    RGB(120, 224, 248), RGB(176, 112, 232), RGB(104, 216, 240), RGB(58, 24, 88), RGB(0, 0, 0) };
+    RGB(120, 224, 248), RGB(176, 112, 232), RGB(104, 216, 240), RGB(58, 24, 88), RGB(0, 0, 0), RGB(42, 24, 56), RGB(20, 10, 30), RGB(154, 122, 184), RGB(58, 42, 78), RGB(112, 40, 48) };
 
 /* ------------------------------------------------------------------ font (the game's, from the ROM) */
 static uint8_t font[0x800];      /* glyph c (0-127) at c*16: GB 2bpp, ink = colour 1; 0-31 are HUD icons */
@@ -32,10 +32,12 @@ static void lzss(const uint8_t *src, size_t n, uint8_t *out, int len, int skip) 
         }
     }
 }
+static void buildFromRom(const uint8_t *rom, size_t len);
 int link_init(const uint8_t *rom, size_t len) {
     if (len < 0x3964A3 + 0x1000) return 0;
     lzss(rom + 0x3964A3, len - 0x3964A3, font, 0x800, 0x1000);        /* tiles $100-$17F of the HUD/font tileset */
     haveFont = 1;
+    buildFromRom(rom, len);                                           /* the icons and Shantae */
     return 1;
 }
 
@@ -281,76 +283,115 @@ static void readSt(const LinkIn *in, St *s) {
     for (size_t i = 0; i < sizeof TOWNS / sizeof TOWNS[0]; i++) if (TOWNS[i].map == s->map) { snprintf(s->area, sizeof s->area, "%s", TOWNS[i].name); return; }
 }
 
-/* ------------------------------------------------------------------ icons from the game's inventory screen
- * The first time the in-game inventory is open, the item, stone, talisman, squid and firefly icons are copied from live
- * VRAM (2x2 tiles with their CGB attributes and palettes), as link.js does, and kept on the SD card by the frontend.
- * Layout (SHANTAE-RAM.md, "First-start extraction"): item i at row 5 + 2*(i/4), column 11 + 2*(i%4); stones row 12 and
- * talismans row 15, column 11 + 2i; squid 1,14; firefly 1,17. */
+/* ------------------------------------------------------------------ icons and Shantae, from the ROM (link.js 0.31, 0.32)
+ * The inventory screen's two LZSS tilesets (7A:6515 and 7A:7113) and its BG palettes (7A:7C30, 64 bytes). Each icon is
+ * 2x2 tiles of that screen's BG map: tile, CGB attribute, in map order (tiles are $8800-addressed). So every icon is
+ * there from the first boot, owned or not; 0.2-0.13 copied them from VRAM the first time the inventory was open.
+ * Shantae: the inventory's BG map, 20x18 (tile, attribute) words at 7A:7C72, gives her backdrop (columns 1-9, rows 1-17);
+ * her sprites are object cels in bank 7B (body, face and hair, one per Fighter's Gear piece), OBJ palettes at 7B:427A. */
 static uint16_t iconPx[ICON_N][256];
 static uint8_t iconA[ICON_N][256], iconHave[ICON_N];
-static int iconsDirty;
-static int isInventory(const LinkIn *in) {
-    int m = 0x1800;
-    return in->vram(0, m) == 0x8A && in->vram(0, m + 19) == 0x8B && in->vram(0, m + 17 * 32) == 0xA1 && in->vram(0, m + 4 * 32 + 10) == 0xDA;
+static const char *ICON_MAP[ICON_N] = {
+    "800C810CB00CB10C", "0002010230023102", "0A0F1E071A0F5C07", "FE07FF07D80CD90C", "0402050214021502", "A40CA50CB40CB50C",
+    "2202230232023302", "A00FA10FA20FA22F", "820C830CB20CB30C", "3F07AF074F07BF07", "A60CA70CB60CB70C", "020F030F120F130F",
+    "A400A500B400B500", "2603270336033703", "A80EA90EB80EB90E", "A200A300B200B300",
+    "2806290638062E06", "A600A700B600B700", "0803082318031823", "8600870096009700", "8000802090009020", "C606C626D606D626" };
+static int hexv(char c) { return c <= '9' ? c - '0' : c - 'A' + 10; }
+static uint16_t cgb565(const uint8_t *pal, int i) {            /* colour i of a BGR555 table */
+    int c = pal[i * 2] | pal[i * 2 + 1] << 8, r = c & 31, g = (c >> 5) & 31, b = c >> 10 & 31;
+    return (uint16_t)(r << 11 | g << 6 | (g >> 4) << 5 | b);
 }
-static void grabBlock(const LinkIn *in, int key, int row, int col) {
-    if (iconHave[key]) return;
-    int lcdc = in->peek(0xFF40), m = (lcdc & 8) ? 0x1C00 : 0x1800, filled = 0;
-    const uint8_t *pal = in->cgbpal(0);
-    uint16_t *px = iconPx[key]; uint8_t *al = iconA[key];
-    for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
-        int i = m + (row + dy) * 32 + col + dx, t = in->vram(0, i), at = in->vram(1, i);
-        int n = (lcdc & 0x10) ? t : (t < 128 ? 256 + t : t), bank = (at >> 3) & 1, p = at & 7;
-        for (int y = 0; y < 8; y++) {
-            int ry = (at & 0x40) ? 7 - y : y, lo = in->vram(bank, n * 16 + ry * 2), hi = in->vram(bank, n * 16 + ry * 2 + 1);
-            for (int x = 0; x < 8; x++) {
-                int rx = (at & 0x20) ? 7 - x : x, q = ((lo >> (7 - rx)) & 1) | (((hi >> (7 - rx)) & 1) << 1);
-                int c = pal[p * 8 + q * 2] | pal[p * 8 + q * 2 + 1] << 8, r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
-                int o = (dy * 8 + y) * 16 + dx * 8 + x;
-                px[o] = (uint16_t)(r << 11 | g << 6 | (g >> 4) << 5 | b); al[o] = 1;
-                filled += q != 0;
-            }
-        }
+/* an 8x8 2bpp tile into a w x h RGB565 buffer; colour 0 is skipped unless see0 */
+static void tileInto(uint16_t *dst, int w, int h, const uint8_t *t, int x, int y, const uint16_t col[4], int see0, int hf, int vf) {
+    for (int yy = 0; yy < 8; yy++) for (int xx = 0; xx < 8; xx++) {
+        int ry = vf ? 7 - yy : yy, rx = hf ? 7 - xx : xx, v = ((t[ry * 2] >> (7 - rx)) & 1) | (((t[ry * 2 + 1] >> (7 - rx)) & 1) << 1);
+        if ((!v && !see0) || x + xx < 0 || x + xx >= w || y + yy < 0 || y + yy >= h) continue;
+        dst[(y + yy) * w + x + xx] = col[v];
     }
-    if (filled <= 8) return;                                    /* an empty slot is all colour 0 */
+}
+static void palCols(uint16_t col[4], const uint8_t *pal, int p) { for (int q = 0; q < 4; q++) col[q] = cgb565(pal, p * 4 + q); }
+static void iconFromRom(int key, uint8_t *const bank[2], const uint8_t *pal) {
+    const char *e = ICON_MAP[key];
+    uint16_t *px = iconPx[key]; uint8_t *al = iconA[key];
+    for (int k = 0; k < 4; k++) {
+        int t = hexv(e[k * 4]) << 4 | hexv(e[k * 4 + 1]), at = hexv(e[k * 4 + 2]) << 4 | hexv(e[k * 4 + 3]);
+        uint16_t c[4]; palCols(c, pal, at & 7);
+        tileInto(px, 16, 16, bank[(at >> 3) & 1] + (t < 128 ? 256 + t : t) * 16, (k & 1) * 8, (k >> 1) * 8, c, 1, at & 0x20, at & 0x40);
+    }
+    memset(al, 1, 256);
     /* the inventory panel colour behind some icons: see-through when it fills the corners and is light */
     uint16_t bg = px[0]; int corners = (px[15] == bg) + (px[240] == bg) + (px[255] == bg) + 1;
     int lum = ((bg >> 11) * 8 * 30 + ((bg >> 5) & 63) * 4 * 59 + (bg & 31) * 8 * 11) / 100;
     if (corners >= 3 && lum > 96) for (int i = 0; i < 256; i++) if (px[i] == bg) al[i] = 0;
-    iconHave[key] = 1; iconsDirty = 1;
+    iconHave[key] = 1;
 }
-static void captureIcons(const LinkIn *in) {
-    if (!isInventory(in)) return;
-    for (int i = 0; i < 12; i++) if (in->peek(0xCA70 + i) & 255) grabBlock(in, ICON_ITEM + i, 5 + 2 * (i >> 2), 11 + 2 * (i & 3));
-    int stones = in->peek(0xCB38), tals = in->peek(0xCB39);
-    for (int i = 0; i < 4; i++) {
-        if (stones & (0x10 << i)) grabBlock(in, ICON_STONE + i, 12, 11 + 2 * i);
-        if (tals & (0x10 << i)) grabBlock(in, ICON_TAL + i, 15, 11 + 2 * i);
+#define FIG_W 72
+#define FIG_H 136
+#define FIG_KEY 0xF81F                                          /* see-through in a layer */
+enum { FIG_BODY, FIG_BOOT, FIG_SASH, FIG_CUFF, FIG_TIARA, FIG_TOP, FIG_N };
+static uint16_t figL[FIG_N][FIG_W * FIG_H];
+static int haveFig;
+/* a cel of bank 7B into a layer (B: the bank; a cel's sprites sit at screen (dx, dy - 24), and the panel starts at (8, 8)) */
+static void celInto(uint16_t *layer, const uint8_t *B, const uint8_t *opal, unsigned cp) {
+    #define B16(a) (B[(a) - 0x4000] | B[(a) - 0x3FFF] << 8)
+    unsigned lp = B16(cp), tb = B16(cp + 8);
+    if (lp < 0x4000 || lp + 0x23 + 120 > 0x8000 || tb < 0x4000) return;
+    int n = B[lp + 0x20 - 0x4000];
+    for (int k = 0; k < n && k < 40; k++) {
+        const uint8_t *e = B + lp + 0x23 + 3 * k - 0x4000;
+        int dy = e[0], dx = e[1], at = e[2]; uint16_t c[4]; palCols(c, opal, at & 7);
+        for (int h = 0; h < 2; h++) {
+            unsigned ta = tb + 1 + (2 * k + h) * 16;
+            if (ta + 16 > 0x8000) continue;
+            tileInto(layer, FIG_W, FIG_H, B + ta - 0x4000, dx - 8, dy - 32 + ((at & 0x40) ? 1 - h : h) * 8, c, 0, at & 0x20, at & 0x40);
+        }
     }
-    grabBlock(in, ICON_SQUID, 1, 14); grabBlock(in, ICON_FLY, 1, 17);
+    #undef B16
 }
-/* draws icon key at (x, y); faded = only every other pixel (collected, or a firefly by day). 0 when not captured. */
+static void buildFromRom(const uint8_t *rom, size_t len) {
+    static uint8_t b0[0x1800], b1[0x1800];
+    if (len < 0x1F0000) return;
+    uint8_t *const bank[2] = { b0, b1 };
+    const uint8_t *bgp = rom + 0x1EBC30, *map = rom + 0x1EBC70, *opal = rom + 0x1EC27A, *B = rom + 0x7B * 0x4000;
+    lzss(rom + 0x1EA515, 0xC00, b0, 0x1800, 0); lzss(rom + 0x1EB113, 0xAE0, b1, 0x1800, 0);
+    for (int k = 0; k < ICON_N; k++) iconFromRom(k, bank, bgp);
+    if (map[0] != 20 || map[1] != 18) return;
+    for (int f = 0; f < FIG_N; f++) for (int i = 0; i < FIG_W * FIG_H; i++) figL[f][i] = FIG_KEY;
+    for (int r = 1; r < 18; r++) for (int c = 1; c < 10; c++) {
+        const uint8_t *o = map + 2 + 2 * (r * 20 + c); int t = o[0], at = o[1]; uint16_t col[4]; palCols(col, bgp, at & 7);
+        tileInto(figL[FIG_BODY], FIG_W, FIG_H, bank[(at >> 3) & 1] + (t < 128 ? 256 + t : t) * 16, (c - 1) * 8, (r - 1) * 8, col, 1, at & 0x20, at & 0x40);
+    }
+    /* the menu's B button corner and the bar under her feet */
+    for (int y = 112; y < FIG_H; y++) for (int x = 0; x < FIG_W; x++) if (x < 16 || y >= 127) figL[FIG_BODY][y * FIG_W + x] = 0;
+    celInto(figL[FIG_BODY], B, opal, 0x42BA);
+    celInto(figL[FIG_BOOT], B, opal, 0x47DF); celInto(figL[FIG_CUFF], B, opal, 0x4768);
+    celInto(figL[FIG_SASH], B, opal, 0x46CB); celInto(figL[FIG_TIARA], B, opal, 0x462E);
+    celInto(figL[FIG_TOP], B, opal, 0x44F9); celInto(figL[FIG_TOP], B, opal, 0x48EE);
+    haveFig = 1;
+}
+/* src over dst, a of 256 */
+static uint16_t blend565(uint16_t d, uint16_t s, int a) {
+    int r = ((d >> 11) * (256 - a) + (s >> 11) * a) >> 8, g = (((d >> 5) & 63) * (256 - a) + ((s >> 5) & 63) * a) >> 8, b = ((d & 31) * (256 - a) + (s & 31) * a) >> 8;
+    return (uint16_t)(r << 11 | g << 5 | b);
+}
+/* draws icon key at (x, y); faded 1 = only every other pixel (collected, or a firefly by day), 2 = faint (not owned yet) */
 static int drawIcon(uint16_t *fb, int key, int x, int y, int faded) {
     if (key < 0 || key >= ICON_N || !iconHave[key]) return 0;
     for (int j = 0; j < 16; j++) for (int i = 0; i < 16; i++) {
         int o = j * 16 + i;
-        if (!iconA[key][o] || (faded && ((i + j) & 1))) continue;
-        if (x + i >= 0 && x + i < FW && y + j >= 0 && y + j < FH) fb[(y + j) * FW + x + i] = iconPx[key][o];
+        if (!iconA[key][o] || (faded == 1 && ((i + j) & 1)) || x + i < 0 || x + i >= FW || y + j < 0 || y + j >= FH) continue;
+        uint16_t *d = &fb[(y + j) * FW + x + i];
+        *d = faded == 2 ? blend565(*d, iconPx[key][o], 77) : iconPx[key][o];
     }
     return 1;
 }
-size_t link_icons_save(uint8_t *buf, size_t cap) {
-    size_t n = 4 + ICON_N + ICON_N * 256 * 3;
-    if (!iconsDirty || cap < n) return 0;
-    memcpy(buf, "SDI1", 4); memcpy(buf + 4, iconHave, ICON_N);
-    memcpy(buf + 4 + ICON_N, iconPx, sizeof iconPx); memcpy(buf + 4 + ICON_N + sizeof iconPx, iconA, sizeof iconA);
-    iconsDirty = 0;
-    return n;
-}
-void link_icons_load(const uint8_t *buf, size_t n) {
-    if (n < 4 + ICON_N + sizeof iconPx + sizeof iconA || memcmp(buf, "SDI1", 4)) return;
-    memcpy(iconHave, buf + 4, ICON_N);
-    memcpy(iconPx, buf + 4 + ICON_N, sizeof iconPx); memcpy(iconA, buf + 4 + ICON_N + sizeof iconPx, sizeof iconA);
+static void drawFigLayer(int f, int x, int y, int a) {
+    for (int j = 0; j < FIG_H; j++) for (int i = 0; i < FIG_W; i++) {
+        uint16_t s = figL[f][j * FIG_W + i];
+        if (s == FIG_KEY) continue;
+        uint16_t *d = &F[(y + j) * FW + x + i];
+        *d = a >= 256 ? s : blend565(*d, s, a);
+    }
 }
 
 /* ------------------------------------------------------------------ top-screen borders (BezelTheme.java + GameView HUD)
@@ -521,6 +562,7 @@ static struct {
     uint8_t keys[8];                                            /* 0.10: KEY3_* + 1 per ACT_*, 0 = the default */
     uint8_t old3ds;                                             /* 0.11: OLD 3DS SPEED */
     uint8_t frameskip;                                          /* 0.12: FRAME SKIP */
+    uint8_t narrow;                                             /* 0.15: WIDE VIEW off. Named so: older files hold 0 here, and it's on by default */
 } prefs = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0 }, 0, 0 };
 static int prefsDirty;
 static struct { int ok, frames, gems, hearts, night; uint8_t items[12]; } pv;
@@ -552,10 +594,11 @@ size_t link_prefs_save(uint8_t *buf, size_t cap) {
 void link_prefs_load(const uint8_t *buf, size_t n) {
     size_t old = (size_t)((const char *)prefs.keys - (const char *)&prefs);   /* 0.9's file stops before the keys */
     if (n >= 4 + old && n <= 4 + sizeof prefs && !memcmp(buf, "SDP1", 4)) memcpy(&prefs, buf + 4, n - 4);
-    if (prefs.progView < 0 || prefs.progView > 2) prefs.progView = 0;
+    if (prefs.progView < 0 || prefs.progView > 3) prefs.progView = 0;
     for (int a = 0; a < 8; a++) if (prefs.keys[a] > KEY3_N) prefs.keys[a] = 0;
     if (prefs.old3ds > 1) prefs.old3ds = 0;
     if (prefs.frameskip > 1) prefs.frameskip = 0;
+    if (prefs.narrow > 1) prefs.narrow = 0;
 }
 /* the buttons: defaults A, B, START, SELECT and R for fast-forward */
 static const uint8_t KEY_DEF[ACT_N] = { KEY3_A, KEY3_B, KEY3_START, KEY3_SELECT, KEY3_R };
@@ -572,18 +615,94 @@ int link_frameskip(int set) {
     if (set >= 0 && set != prefs.frameskip) { prefs.frameskip = (uint8_t)set; prefsDirty = 1; }
     return prefs.frameskip;
 }
+int link_wide(int set) {
+    if (set >= 0 && set == prefs.narrow) { prefs.narrow = (uint8_t)!set; prefsDirty = 1; }
+    return !prefs.narrow;
+}
+
+/* ------------------------------------------------------------------ monsters (monsters.js, link.js drawMonsters)
+ * Every object runs a script; its PC (node +2..+4, nodes in WRAM bank 3 every $7E bytes) lies inside the code of its type.
+ * The type table at 0A:4000 (4 bytes per type: $40, script lo, hi, bank) gives each type's first address, so "the type
+ * whose script starts last at or before this PC, in the same bank" names any live object. An entry lights up the first
+ * time that enemy is on screen. Its picture is one sprite cel from the ROM (SHANTAE-RAM.md "Sprite cels in the ROM"), in
+ * the area's OBJ palettes: the game's copy at $C400 when met (a night copy is replaced by a day one later). */
+static const struct { uint8_t t0, t1; const char *name, *where; uint8_t bank; uint16_t cel; } MON[] = {
+    {108,0,"CLUMP","SCARECROW FIELD",0x64,0x4311}, {107,0,"SCARECROW","SCARECROW FIELD",0x62,0x6C38},
+    {113,0,"SPIDER","SPIDERWOOD AND GOBLIN FOREST",0x6E,0x6E9D}, {114,0,"GOBLIN","SPIDERWOOD AND GOBLIN FOREST",0x79,0x6539},
+    {126,0,"SNAKE","WATERFALL LAKE",0x8B,0x493B}, {125,0,"FROG","WATERFALL LAKE",0x88,0x755C},
+    {127,0,"WATER SERPENT","WATERFALL LAKE",0x8B,0x4E8B}, {150,0,"AARDVARK BEE","LAKES, BOG, FORESTS, DESERT",0xAF,0x765C},
+    {116,0,"SENTIENT TOMATO","RAIN STORM RIVER",0x9B,0x426F}, {130,0,"REAPER","RAIN STORM RIVER",0xDB,0x7225},
+    {132,0,"GIANT SNAIL","SNAIL WASTELAND",0xC9,0x4780}, {135,0,"PRAYING MANTIS","SNAIL WASTELAND",0xDB,0x507C},
+    {136,0,"ZOMBIE","ZOMBIE SWAMP",0xC7,0x724A}, {117,118,"BLOB","GHOST FOREST",0xB0,0x49AD},
+    {121,0,"KAPPA","GHOST FOREST",0xC8,0x55BC}, {122,0,"GHOST","GHOST FOREST",0xC8,0x69F8},
+    {115,0,"ARCHER","ARCHER FOREST",0x8B,0x77C3}, {123,0,"TOTEM","ARCHER FOREST",0xDD,0x692A},
+    {152,0,"WEREWOLF","MOUNT POINTY",0xA8,0x6FBD}, {153,0,"ICE TURTLE","MOUNT POINTY",0xDC,0x715B},
+    {133,0,"GRYPHON","EAGLE WASTELAND",0xDA,0x6927}, {147,0,"HANGING SHADOW","MUD BOG",0x9B,0x55D0},
+    {148,0,"SHADOW JUMPER","MUD BOG",0xA5,0x7BA6}, {149,0,"DARK SLIME","MUD BOG",0xA8,0x4F26},
+    {144,0,"SCARAB","THE DESERTS",0xD9,0x60C6}, {139,0,"SCORPION F","LADIES DESERT",0xA9,0x5550},
+    {145,0,"SANDWORM","LADIES DESERT",0xD9,0x72E6}, {134,0,"NAGA","NAGA WASTELAND",0xDC,0x4F5B},
+    {48,0,"GOLEM","GOLEM MINE",0x81,0x41F3}, {52,0,"CONSTRUCT","GOLEM MINE",0x81,0x7D43},
+    {55,0,"MINE SLUG","GOLEM MINE",0x80,0x44D9}, {73,0,"SHADE","CACKLE MOUND",0x95,0x66CC},
+    {74,0,"SHADOW IMP","CACKLE MOUND",0x96,0x4BB2}, {75,0,"SKELETON","CACKLE MOUND",0x98,0x5B00},
+    {189,0,"DOLL","CAVES",0xC9,0x6238}, {190,0,"GATE","CAVES",0xC9,0x6519},
+    {109,0,"IMP","FIELDS, FORESTS AND CAVES",0x63,0x75D5}, {140,0,"SCORPION M","MENS DESERT",0xAA,0x629F},
+    {142,0,"CROW","MENS DESERT",0xD8,0x6829}, {192,0,"GARY","TWINKLE PALACE",0xD0,0x7589},
+    {204,0,"BOB","TWINKLE PALACE",0xDC,0x7BD9}, {211,212,"FLYING TINKERBAT","RISKY'S ISLAND",0xE0,0x48D6},
+    {208,0,"STEAM TINKERBAT","RISKY'S ISLAND",0xE0,0x4219}, {209,0,"TINKER STACK","RISKY'S ISLAND",0xE0,0x50D2},
+    {172,215,"TINKERBAT","SCUTTLE DOCKS, RISKY'S ISLAND",0x7D,0x4DC8}, {31,220,"RISKY BOOTS","RISKY'S ISLAND",0x5F,0x6BFB} };
+#define NMON ((int)(sizeof MON / sizeof MON[0]))
+static struct { uint8_t seen[NMON], night[NMON], pal[NMON][64]; } mons;
+static int monsDirty;
+static int monCount(void) { int n = 0; for (int i = 0; i < NMON; i++) n += mons.seen[i]; return n; }
+size_t link_monsters_save(uint8_t *buf, size_t cap) {
+    if (!monsDirty || cap < 4 + sizeof mons) return 0;
+    memcpy(buf, "SDM1", 4); memcpy(buf + 4, &mons, sizeof mons);
+    monsDirty = 0;
+    return 4 + sizeof mons;
+}
+void link_monsters_load(const uint8_t *buf, size_t n) {
+    if (n == 4 + sizeof mons && !memcmp(buf, "SDM1", 4)) memcpy(&mons, buf + 4, sizeof mons);
+}
+static int monOfNode(const LinkIn *in, int bank, unsigned pc) {     /* the MON entry of a live object's script, or -1 */
+    int t = -1; unsigned best = 0; const uint8_t *tt = in->rom + 0x0A * 0x4000;
+    for (int k = 0; k < 256 && tt[k * 4] == 0x40; k++) {
+        unsigned a = tt[k * 4 + 1] | tt[k * 4 + 2] << 8;
+        if (tt[k * 4 + 3] == bank && a <= pc && a >= best) { best = a; t = k; }
+    }
+    if (t < 0) return -1;
+    for (int i = 0; i < NMON; i++) if (MON[i].t0 == t || (MON[i].t1 && MON[i].t1 == t)) return i;
+    return -1;
+}
+static void updateMonsters(const LinkIn *in) {
+    if (!in->rom || in->romLen < 0x0A * 0x4000 + 1024 || rd(in, 0xC39D) != 2) return;
+    int any = 0; uint8_t pal[64];
+    for (int i = 0; i < 64; i++) { pal[i] = (uint8_t)rd(in, 0xC400 + i); if (i >= 32 && i < 48) any |= pal[i]; }
+    if (!any) return;                                               /* the palettes aren't set up yet */
+    int cx = rd16(in, 0xC9FB), cy = rd16(in, 0xC9FD), night = (rd(in, 0xC3EA) & 0x80) != 0;
+    for (int n = 1; n < 32; n++) {                                  /* node 0 is Shantae */
+        unsigned o = n * 0x7E;
+        if (in->wram(3, o) != 0) continue;
+        unsigned pc = in->wram(3, o + 2) | in->wram(3, o + 3) << 8;
+        if (!pc) continue;
+        int sx = (in->wram(3, o + 0x34) | in->wram(3, o + 0x35) << 8) - cx, sy = (in->wram(3, o + 0x37) | in->wram(3, o + 0x38) << 8) - cy;
+        if (sx < -16 || sx >= 160 || sy < -16 || sy >= 136) continue;
+        int e = monOfNode(in, in->wram(3, o + 4), pc);
+        if (e < 0) continue;
+        if (!mons.seen[e] || (mons.night[e] && !night)) { mons.seen[e] = 1; mons.night[e] = (uint8_t)night; memcpy(mons.pal[e], pal, 64); monsDirty = 1; }
+    }
+}
 
 static long workN;
 void link_work(const LinkIn *in) {
-    if (++workN % 15 == 0 && in->vram && in->cgbpal) captureIcons(in);
-    if (workN % 10 == 0) trackStats(in);
+    if (++workN % 10 == 0) trackStats(in);
+    if (workN % 12 == 0) updateMonsters(in);
     map_work(in);
 }
 
 /* ------------------------------------------------------------------ pages */
 enum { P_SHANTAE, P_MAP, P_PROGRESS };
 static int page;
-static int dancePopT = -1, lastSel, tick;
+static int lastSel, tick;
 static uint8_t lastSig[72];
 /* drag on the Link screen (dx, dy in Link pixels): pans the map */
 static int mcard, signScroll;
@@ -601,40 +720,68 @@ static void frame(int x, int y, int w, int h, const char *title) {
 }
 static void mmss(char *b, size_t n, int frames) { int s = frames / 60; snprintf(b, n, "%d:%02d", s / 60, s % 60); }
 
+/* a framed 18 px slot with the game's icon: full colour when owned, faint when not */
+static void slotIcon(int key, int have, int x, int y) {
+    int edge = have ? LGREY : LINE2;
+    rect(x, y, 18, 18, have ? DPURPLE : DARK2);
+    rect(x, y, 18, 1, edge); rect(x, y + 17, 18, 1, edge); rect(x, y, 1, 18, edge); rect(x + 17, y, 1, 18, edge);
+    drawIcon(F, key, x + 1, y + 1, have ? 0 : 2);
+}
+/* SHANTAE (link.js drawStatusFigure): hearts and gems, then Shantae in the gear she has beside items, stones, talismans
+ * and the rest; below her what each gear piece she has lets her do */
+#define FIG_X 6
+#define FIG_Y 36
+#define ITEM_X 86
+#define ITEM_CW 38
+#define ITEM_CH 20
+static int itemMsgT;
 static void pageShantae(const St *s) {
     char b[48];
-    /* hearts (4 units each) and gems */
     int full = s->maxHearts / 4;
-    for (int i = 0; i < full && i < 14; i++) { int q = s->hearts - i * 4; heart(14 + i * 9, 34, q < 0 ? 0 : q > 4 ? 4 : q); }
-    snprintf(b, sizeof b, "%d", s->gems); textR(b, 308, 33, WHITE); text("GEMS", 308 - 8 * ((int)strlen(b) + 5), 33, GEM);
-    /* items: 3 rows of 4, count beside; the equipped one framed, named below with what it does */
-    frame(6, 50, 308, 106, "ITEMS");
-    for (int i = 0; i < 12; i++) {
-        int x = 12 + (i & 3) * 76, y = 58 + (i >> 2) * 22;
-        if (i == s->equipped && s->items[i]) rect(x - 2, y - 4, 74, 18, SEL);
-        if (!(s->items[i] && drawIcon(F, ICON_ITEM + i, x, y - 3, 0)))    /* the game's icon once captured, else the name */
-            text(ITEMS[i], x, y, s->items[i] ? INK : GREY);
-        snprintf(b, sizeof b, "%d", s->items[i]); textR(b, x + 70, y, s->items[i] ? WHITE : GREY);
+    for (int i = 0; i < full && i < 14; i++) { int q = s->hearts - i * 4; heart(14 + i * 9, 25, q < 0 ? 0 : q > 4 ? 4 : q); }
+    snprintf(b, sizeof b, "%d", s->gems); textR(b, 308, 24, WHITE); text("GEMS", 308 - 8 * ((int)strlen(b) + 5), 24, GEM);
+    /* Shantae: the gear she has on her and the rest faint, as the game stacks them */
+    rect(FIG_X - 1, FIG_Y - 1, FIG_W + 2, FIG_H + 2, DRED);
+    if (haveFig) {
+        static const uint8_t ORDER[4] = { 0, 2, 1, 3 };          /* boot, cuff, sash, tiara; s->gear is boot, sash, cuff, tiara */
+        drawFigLayer(FIG_BODY, FIG_X, FIG_Y, 256);
+        for (int i = 0; i < 4; i++) { int g = ORDER[i]; drawFigLayer(FIG_BOOT + g, FIG_X, FIG_Y, s->gear[g] ? 256 : 56); }
+        drawFigLayer(FIG_TOP, FIG_X, FIG_Y, 256);
     }
-    if (s->equipped < 12 && s->items[s->equipped]) { text(ITEMS[s->equipped], 12, 128, GOLD); text(ITEM_NOTE[s->equipped], 12, 140, LGREY); }
-    else text("TAP AN ITEM TO EQUIP IT", 12, 134, GREY);
-    /* stones, talismans, gear, dances */
-    frame(6, 166, 308, 50, "COLLECTION");
-    int haveIcons = 0;
-    for (int i = 0; i < 4; i++) haveIcons += iconHave[ICON_STONE + i] + iconHave[ICON_TAL + i];
-    if (haveIcons) {                                            /* stones and talismans as one row of the game's icons */
-        int st = s->flags[0x1D], ta = s->flags[0x1E];
-        for (int i = 0; i < 4; i++) {
-            if (st & (0x10 << i)) drawIcon(F, ICON_STONE + i, 12 + i * 18, 170, 0);
-            if (ta & (0x10 << i)) drawIcon(F, ICON_TAL + i, 90 + i * 18, 170, 0);
+    /* right of her: the 12 items (tap to equip) */
+    for (int i = 0; i < 12; i++) {
+        int x = ITEM_X + (i % 6) * ITEM_CW, y = FIG_Y + (i / 6) * ITEM_CH, n = s->items[i], on = i == s->equipped && n > 0;
+        if (on) {
+            rect(x, y, ITEM_CW - 2, ITEM_CH - 2, SEL);
+            rect(x, y, ITEM_CW - 2, 1, GOLD); rect(x, y + ITEM_CH - 3, ITEM_CW - 2, 1, GOLD); rect(x, y, 1, ITEM_CH - 2, GOLD); rect(x + ITEM_CW - 3, y, 1, ITEM_CH - 2, GOLD);
         }
-        snprintf(b, sizeof b, "%d/4 %d/4", s->stones, s->tals); textR(b, 308, 174, LGREY);
-    } else { snprintf(b, sizeof b, "STONES %d/4  TALISMANS %d/4", s->stones, s->tals); text(b, 12, 174, LGREY); }
-    static const char *GN[] = { "BOOT", "SASH", "CUFF", "TIARA" };
-    for (int i = 0; i < 4; i++) text(GN[i], 12 + i * 52, 188, s->gear[i] ? GREEN : GREY);
-    int nd = 0; for (int i = 0; i < 11; i++) nd += s->dances[i];
-    snprintf(b, sizeof b, "DANCES %d", nd); textR(b, 308, 188, LGREY);
-    int toHand = s->squids; snprintf(b, sizeof b, "SQUIDS TO HAND IN %d", toHand); text(b, 12, 202, toHand ? PURPLE : GREY);
+        slotIcon(ICON_ITEM + i, n > 0, x, y);
+        if (n) { snprintf(b, sizeof b, "%d", n > 99 ? 99 : n); text(b, x + 19, y + 5, on ? GOLD : WHITE); }
+    }
+    /* stones and talismans */
+    int ry = FIG_Y + 44, st = s->flags[0x1D], ta = s->flags[0x1E], got = 0, nd = 0;
+    for (int i = 0; i < 4; i++) {
+        slotIcon(ICON_STONE + i, !!(st & (0x10 << i)), ITEM_X + i * 19, ry);
+        slotIcon(ICON_TAL + i, !!(ta & (0x10 << i)), ITEM_X + 82 + i * 19, ry);
+        got += !!s->gear[i];
+    }
+    /* squids, fireflies, gear */
+    ry += 22;
+    drawIcon(F, ICON_SQUID, ITEM_X, ry, 0); snprintf(b, sizeof b, "%d", s->squids > 99 ? 99 : s->squids); text(b, ITEM_X + 18, ry + 5, TEAL);
+    drawIcon(F, ICON_FLY, ITEM_X + 76, ry, 0); snprintf(b, sizeof b, "%d", s->fireflies > 99 ? 99 : s->fireflies); text(b, ITEM_X + 94, ry + 5, INK);
+    snprintf(b, sizeof b, "GEAR %d/4", got); text(b, ITEM_X + 152, ry + 5, got == 4 ? GOLD : LGREY);
+    /* the equipped item and what it does */
+    ry += 19;
+    if (itemMsgT > tick) text("NONE LEFT", ITEM_X, ry, RED);
+    else if (s->equipped < 12 && s->items[s->equipped]) { text(ITEMS[s->equipped], ITEM_X, ry, GOLD); text(ITEM_NOTE[s->equipped], ITEM_X, ry + 10, LGREY); }
+    else text("TAP AN ITEM TO EQUIP", ITEM_X, ry, GREY);
+    /* the dances: tap for the list */
+    for (int i = 0; i < 11; i++) nd += s->dances[i];
+    snprintf(b, sizeof b, "DANCES %d OF 11", nd); text(b, ITEM_X, 152, LGREY);
+    /* below her: what each gear piece she has lets her do */
+    static const char *GEAR_NOTE[4] = { "BOOT DOUBLE-TAP UP: SPIN KICK", "SASH ATTACK IN A KICK: DRILL", "CUFF HOLD ATTACK: ELBOW DASH", "TIARA ATTACK IN A DASH: TWIRL" };
+    int y = 178;
+    for (int i = 0; i < 4; i++) if (s->gear[i]) { text(GEAR_NOTE[i], FIG_X, y, LGREY); y += 10; }
 }
 
 /* the 100% checklist (link.js completion): PROGRESS > ITEMS and the ending card */
@@ -652,7 +799,7 @@ static int completion(const St *s, Row R[6]) {
 }
 static void hms(char *b, size_t n, long frames) { long s = frames * 10000 / 597275; snprintf(b, n, "%ld:%02ld:%02ld", s / 3600, s / 60 % 60, s % 60); }
 
-enum { V_ITEMS, V_STORY, V_STATS };
+enum { V_ITEMS, V_STORY, V_STATS, V_MONSTERS };                 /* as kept in the settings file */
 static int storyOpen, statArm;
 static void viewItems(const St *s) {
     char b[40]; Row R[6];
@@ -731,25 +878,168 @@ static void viewStats(void) {
     rect(242, 194, 64, 18, armed ? RED : PANEL); rect(242, 194, 64, 1, GOLD); rect(242, 211, 64, 1, GOLD);
     textC(armed ? "SURE?" : "RESET", 274, 199, WHITE);
 }
-static void pageProgress(const St *s) {
-    static const char *V[3] = { "ITEMS", "STORY", "STATS" };
-    for (int i = 0; i < 3; i++) {
-        int on = prefs.progView == i, x = 6 + i * 103;
-        rect(x, 23, 102, 13, on ? SEL : PANEL);
-        if (on) rect(x, 35, 102, 1, GOLD);
-        textC(V[i], x + 51, 26, on ? WHITE : LGREY);
+/* a monster's cel, fitted and centred in a box; 0 if it doesn't decode */
+static int drawCel(const LinkIn *in, int m, int bx, int by, int bw, int bh) {
+    int bank = MON[m].bank; unsigned cp = MON[m].cel;
+    unsigned lp = romb(in, bank, cp) | romb(in, bank, cp + 1) << 8, tb = romb(in, bank, cp + 8) | romb(in, bank, cp + 9) << 8;
+    int n = romb(in, bank, lp + 0x20);
+    if (!n || n > 40) return 0;
+    int nt = romb(in, bank, tb) * 2, x0 = 9999, y0 = 9999, x1 = -9999, y1 = -9999;
+    for (int k = 0; k < n; k++) {
+        int dy = (int8_t)romb(in, bank, lp + 0x23 + 3 * k), dx = (int8_t)romb(in, bank, lp + 0x24 + 3 * k);
+        if (dx < x0) x0 = dx;
+        if (dy < y0) y0 = dy;
+        if (dx + 8 > x1) x1 = dx + 8;
+        if (dy + 16 > y1) y1 = dy + 16;
     }
-    if (prefs.progView == V_STORY) viewStory(s); else if (prefs.progView == V_STATS) viewStats(); else viewItems(s);
+    int W = x1 - x0, H = y1 - y0;
+    if (W <= 0 || H <= 0 || W > 256 || H > 256) return 0;
+    uint16_t pal[32]; for (int i = 0; i < 32; i++) pal[i] = cgb565(mons.pal[m], i);
+    int sc = 65536, s2 = bw * 65536 / W, s3 = bh * 65536 / H;        /* never bigger than the game draws it */
+    if (s2 < sc) sc = s2;
+    if (s3 < sc) sc = s3;
+    int ox = bx + (bw - (W * sc >> 16)) / 2, oy = by + (bh - (H * sc >> 16)) / 2;
+    for (int k = 0; k < n; k++) {
+        int dy = (int8_t)romb(in, bank, lp + 0x23 + 3 * k), dx = (int8_t)romb(in, bank, lp + 0x24 + 3 * k), at = romb(in, bank, lp + 0x25 + 3 * k);
+        for (int half = 0; half < 2; half++) {
+            int ti = 2 * k + half; if (ti >= nt) continue;
+            for (int r = 0; r < 8; r++) {
+                int lo = romb(in, bank, tb + 1 + ti * 16 + r * 2), hi = romb(in, bank, tb + 1 + ti * 16 + r * 2 + 1);
+                for (int x = 0; x < 8; x++) {
+                    int v = ((lo >> (7 - x)) & 1) | (((hi >> (7 - x)) & 1) << 1); if (!v) continue;
+                    int xx = (at & 0x20) ? 7 - x : x, yy = r + half * 8; if (at & 0x40) yy = 15 - yy;
+                    int px = ox + ((dx - x0 + xx) * sc >> 16), py = oy + ((dy - y0 + yy) * sc >> 16);
+                    if (px >= 0 && px < FW && py >= 0 && py < FH) F[py * FW + px] = pal[(at & 7) * 4 + v];
+                }
+            }
+        }
+    }
+    return 1;
+}
+/* PROGRESS > MONSTERS: every enemy, lit up with its picture the first time it's on screen; unmet ones show where to look */
+#define MON_X 6
+#define MON_Y 40
+#define MON_CW 44
+#define MON_CH 40
+#define MON_COLS 7
+#define MON_ROWS 3
+#define MON_TOP (MON_Y + 18)
+#define MON_INFO 198
+#define MON_PAGES ((NMON + MON_COLS * MON_ROWS - 1) / (MON_COLS * MON_ROWS))
+static int monScroll, monPick = -1;
+static void viewMonsters(const LinkIn *in) {
+    char b[24]; int seen = monCount();
+    snprintf(b, sizeof b, "MET %d OF %d", seen, NMON); text(b, MON_X, MON_Y, GOLD);
+    rect(MON_X, MON_Y + 10, 308, 3, DARK1); rect(MON_X, MON_Y + 10, 308 * seen / NMON, 3, GOLD);
+    int start = monScroll * MON_COLS * MON_ROWS;
+    for (int k = 0; k < MON_COLS * MON_ROWS && start + k < NMON; k++) {
+        int m = start + k, x = MON_X + (k % MON_COLS) * MON_CW, y = MON_TOP + (k / MON_COLS) * MON_CH, on = mons.seen[m], pick = monPick == m;
+        rect(x + 1, y + 1, MON_CW - 2, MON_CH - 2, pick ? SEL : on ? DPURPLE : DARK2);
+        int edge = pick ? GOLD : on ? LINE1 : LINE2;
+        rect(x + 1, y + 1, MON_CW - 2, 1, edge); rect(x + 1, y + MON_CH - 2, MON_CW - 2, 1, edge);
+        rect(x + 1, y + 1, 1, MON_CH - 2, edge); rect(x + MON_CW - 2, y + 1, 1, MON_CH - 2, edge);
+        if (!(on && drawCel(in, m, x + 3, y + 3, MON_CW - 6, MON_CH - 6))) textC(on ? "!" : "?", x + MON_CW / 2, y + MON_CH / 2 - 4, on ? INK : LINE2);
+    }
+    if (monPick >= 0) {
+        int met = mons.seen[monPick];
+        text(met ? MON[monPick].name : "???", MON_X, MON_INFO, met ? WHITE : GREY);
+        text(MON[monPick].where, MON_X, MON_INFO + 10, LGREY);
+    } else text("TAP ONE FOR ITS NAME", MON_X, MON_INFO + 4, GREY);
+    snprintf(b, sizeof b, "%d/%d >", monScroll + 1, MON_PAGES); textR(b, MON_X + 308, MON_INFO + 10, GOLD);
+}
+static void tapMonsters(int x, int y) {
+    if (y >= MON_INFO - 2 && x >= MON_X + 244) { monScroll = (monScroll + 1) % MON_PAGES; monPick = -1; return; }
+    if (y < MON_TOP || y >= MON_TOP + MON_ROWS * MON_CH || x < MON_X || x >= MON_X + MON_COLS * MON_CW) return;
+    int m = monScroll * MON_COLS * MON_ROWS + (y - MON_TOP) / MON_CH * MON_COLS + (x - MON_X) / MON_CW;
+    if (m < NMON) monPick = monPick == m ? -1 : m;
+}
+static const uint8_t PROG_TAB[4] = { V_ITEMS, V_MONSTERS, V_STORY, V_STATS };
+static void pageProgress(const St *s, const LinkIn *in) {
+    static const char *V[4] = { "ITEMS", "MONSTERS", "STORY", "STATS" };
+    for (int i = 0; i < 4; i++) {
+        int on = prefs.progView == PROG_TAB[i], x = 6 + i * 77;
+        rect(x, 23, 75, 13, on ? SEL : PANEL);
+        if (on) rect(x, 35, 75, 1, GOLD);
+        textC(V[i], x + 38, 26, on ? WHITE : LGREY);
+    }
+    if (prefs.progView == V_STORY) viewStory(s); else if (prefs.progView == V_STATS) viewStats();
+    else if (prefs.progView == V_MONSTERS) viewMonsters(in); else viewItems(s);
 }
 
-static void dancePop(const St *s) {
-    frame(20, 40, 280, 170, "DANCES");
-    for (int i = 0; i < 11; i++) {
-        int y = 50 + i * 14, on = s->dances[i];
-        text(DANCES[i][0], 30, y, on ? INK : GREY);
-        /* inputs as arrows and letters: the font has the letters; U D L R shown as letters too in this alpha */
-        textR(DANCES[i][1], 290, y, on ? WHITE : GREY);
+/* the dance list. Select in play starts a dance and pops the list up; it closes once she moves, after 20 s or on another
+ * map. The note in the tab bar opens it too and it then stays until closed.
+ * Auto dance (link.js danceFor, 0.33): tap a learned dance and the app dances it. Select starts the beat; input k is taken
+ * when pressed at frame 18 + 64k after it (a window of about 24 frames; SHANTAE-RAM.md "Dance timing"). link_dance_pad
+ * plays the presses on the game's own frames, so fast-forward and frame skip keep the beat. */
+static struct { int on, manual, t, x, y, map; } dp;
+static struct { uint16_t pad[16]; uint8_t len[16]; int n, i, left, which; } ad;
+/* The player's own Select: the beat then runs until she moves or dances, and another Select does nothing. A dance can start
+ * on any later beat (frame 20 + 64n from the press, +-10; driver, 0.14), so auto dance joins it without pressing Select. */
+static struct { int on, x, y, map; long at; } beat;
+static long adFrames;
+static int adBusy(void) { return ad.i < ad.n; }
+static unsigned danceBit(char k) { return k == 'U' ? 16 : k == 'D' ? 32 : k == 'L' ? 64 : k == 'R' ? 128 : k == 'A' ? 256 : 1; }
+static void adStep(unsigned pad, int len) { ad.pad[ad.n] = (uint16_t)pad; ad.len[ad.n++] = (uint8_t)len; }
+static void danceFor(int i) {
+    const char *keys = DANCES[i][1];
+    ad.n = ad.i = 0; ad.which = i;
+    if (beat.on) {                                               /* on the next beat of the player's own (already counted) */
+        int el = (int)(adFrames - beat.at), wait = (20 - el % 64 + 64) % 64;
+        if (wait < 6) wait += 64;
+        adStep(0, wait);
+    } else {
+        adStep(4, 2);                                            /* Select */
+        adStep(0, 18);
+        prefs.dances++; prefsDirty = 1;                          /* link_draw's count only sees the player's own Select */
     }
+    for (int k = 0; keys[k]; k++) { if (k) adStep(0, 61); adStep(danceBit(keys[k]), 3); }
+    ad.left = ad.len[0];
+    beat.on = 0; dp.on = 0;
+}
+unsigned link_dance_pad(void) {
+    adFrames++;
+    if (!adBusy()) return 0;
+    unsigned p = ad.pad[ad.i];
+    if (--ad.left <= 0 && ++ad.i < ad.n) ad.left = ad.len[ad.i];
+    return p;
+}
+/* a dance input: an arrow, or the button's letter */
+static void danceKey(char k, int x, int y, int c) {
+    static const char *UP[7] = { "...#...", "..###..", ".#.#.#.", "...#...", "...#...", "...#...", "...#..." };
+    if (k == 'A' || k == 'B') { glyph(k, x, y, c); return; }
+    for (int j = 0; j < 7; j++) for (int i = 0; i < 7; i++) if (UP[j][i] == '#') {
+        int px = k == 'U' ? i : k == 'D' ? i : k == 'L' ? j : 6 - j, py = k == 'U' ? j : k == 'D' ? 6 - j : i;
+        rect(x + px, y + py, 1, 1, c);
+    }
+}
+#define DP_ROW0 46
+#define DP_ROWH 14
+static void dancePop(const St *s) {
+    char b[24]; int busy = adBusy(), n = 0, auto_ = s->state == 2;
+    frame(14, 28, 292, 190, "DANCES");
+    text(busy ? "DANCING..." : auto_ ? "TAP TO AUTOMATICALLY PERFORM:" : "SELECT, THEN ON THE BEAT:", 24, 34, busy ? GOLD : LGREY);
+    for (int i = 0; i < 11; i++) {
+        int y = DP_ROW0 + i * DP_ROWH, have = s->dances[i], on = busy && ad.which == i, len = (int)strlen(DANCES[i][1]);
+        n += have;
+        if (on) rect(20, y - 3, 280, DP_ROWH - 1, SEL);
+        text(have ? DANCES[i][0] : "?????", 24, y, on ? GOLD : have ? INK : GREY);
+        for (int k = 0; k < len; k++) danceKey(DANCES[i][1][k], 296 - (len - k) * 10, y, have ? WHITE : GREY);
+    }
+    snprintf(b, sizeof b, "%d OF 11 LEARNED", n); text(b, 24, DP_ROW0 + 11 * DP_ROWH + 2, GOLD);
+}
+/* a tap with the list open: a learned dance is danced; anything else closes the list */
+static void tapDancePop(int x, int y, const St *s) {
+    int r = (y - (DP_ROW0 - 3)) / DP_ROWH;
+    if (x >= 14 && x < 306 && y >= DP_ROW0 - 3 && r < 11 && s->state == 2 && s->dances[r] && !adBusy()) danceFor(r);
+    else dp.on = 0;
+}
+static const char *NOTE_PX[8] = { "....####", "....#..#", "....#..#", "....#..#", "..###.##", ".####.##", ".####...", "..##...." };
+#define NOTE_X 284
+#define NOTE_W 36
+static void noteButton(void) {
+    rect(NOTE_X, 222, NOTE_W, 18, dp.on ? SEL : PANEL);
+    if (dp.on) { rect(NOTE_X, 222, NOTE_W, 1, GOLD); rect(NOTE_X, 239, NOTE_W, 1, GOLD); rect(NOTE_X, 222, 1, 18, GOLD); rect(NOTE_X + NOTE_W - 1, 222, 1, 18, GOLD); }
+    for (int j = 0; j < 8; j++) for (int i = 0; i < 8; i++) if (NOTE_PX[j][i] == '#') rect(NOTE_X + 14 + i, 227 + j, 1, 1, dp.on ? GOLD : LGREY);
 }
 
 /* the gear in the top right corner (opens the menu), drawn here */
@@ -770,7 +1060,7 @@ static void gear(int x, int y, int c) {
 #define SIG_Y 112
 #define SIG_W 304
 #define SIG_H 94
-static struct { int on, saved, pc, penX, penY; long frames; int32_t deaths; char date[12], clock[8]; Row rows[6]; } card;
+static struct { int on, saved, pc, penX, penY, monsters; long frames; int32_t deaths; char date[12], clock[8]; Row rows[6]; } card;
 static uint8_t sigPx[SIG_W * SIG_H], hallBuf[64 + SIG_W * SIG_H / 8];
 static size_t hallLen;
 static int inCredits(const LinkIn *in, const St *s) {
@@ -787,7 +1077,7 @@ static void cardStart(const St *s) {
     time_t t = time(NULL); struct tm *d = gmtime(&t);       /* the 3DS clock is local time */
     if (d) { snprintf(card.date, sizeof card.date, "%04d-%02d-%02d", d->tm_year + 1900, d->tm_mon + 1, d->tm_mday);
              snprintf(card.clock, sizeof card.clock, "%02d:%02d", d->tm_hour, d->tm_min); }
-    card.pc = completion(s, card.rows); card.frames = prefs.t; card.deaths = prefs.deaths;
+    card.pc = completion(s, card.rows); card.frames = prefs.t; card.deaths = prefs.deaths; card.monsters = monCount();
     prefsDirty = 1;
 }
 static void endingCard(void) {
@@ -802,6 +1092,7 @@ static void endingCard(void) {
     static const char *SHORT[6] = { "HEARTS", "FIREFLIES", "WARP SQUIDS", "TALISMANS", "GEAR", "DANCES" };
     for (int i = 0; i < 6; i++) { R[n].l = SHORT[i]; snprintf(R[n].v, 16, "%d/%d", card.rows[i].got, card.rows[i].of);
                                   R[n++].c = card.rows[i].got >= card.rows[i].of ? GREEN : WHITE; }
+    R[n].l = "MONSTERS MET"; snprintf(R[n].v, 16, "%d/%d", card.monsters, NMON); R[n++].c = card.monsters >= NMON ? GREEN : WHITE;
     R[n].l = "TIMES DOWN"; snprintf(R[n].v, 16, "%ld", (long)card.deaths); R[n++].c = WHITE;
     for (int i = 0; i < n; i++) {
         int col = i / 5, row = i % 5, x0 = 8 + col * 156;
@@ -839,8 +1130,8 @@ void link_pen(int x, int y) {
     }
     card.penX = x; card.penY = y;
 }
-/* the signed card, once, for the frontend to append to its file: "SDH1", date, clock, play frames, completion, times
- * down, then the signature as SIG_W x SIG_H bits */
+/* the signed card, once, for the frontend to append to its file: "SDH2" (0.14; "SDH1" had no monsters), date, clock, play
+ * frames, completion, times down, width, height, monsters met, then the signature as SIG_W x SIG_H bits */
 size_t link_hall_take(uint8_t *buf, size_t cap) {
     size_t n = hallLen;
     if (!n || cap < n) return 0;
@@ -851,8 +1142,8 @@ static void cardSave(void) {
     int ink = 0; for (size_t i = 0; i < sizeof sigPx; i++) ink |= sigPx[i];
     if (!ink) return;
     uint8_t *p = hallBuf;
-    memcpy(p, "SDH1", 4); memcpy(p + 4, card.date, 12); memcpy(p + 16, card.clock, 8);
-    int32_t v[5] = { (int32_t)card.frames, card.pc, card.deaths, SIG_W, SIG_H }; memcpy(p + 24, v, sizeof v);
+    memcpy(p, "SDH2", 4); memcpy(p + 4, card.date, 12); memcpy(p + 16, card.clock, 8);
+    int32_t v[6] = { (int32_t)card.frames, card.pc, card.deaths, SIG_W, SIG_H, card.monsters }; memcpy(p + 24, v, sizeof v);
     p += 24 + sizeof v;
     memset(p, 0, SIG_W * SIG_H / 8);
     for (int i = 0; i < SIG_W * SIG_H; i++) if (sigPx[i]) p[i >> 3] |= 0x80 >> (i & 7);
@@ -1078,14 +1369,21 @@ int link_draw(uint16_t *fb, const LinkIn *in) {
     if (card.on) { F = fb; FW = LINK_W; FH = LINK_H; rect(0, 0, LINK_W, LINK_H, BG); endingCard(); return 1; }
     /* Select in play starts a dance: show the list for about 5 s (the Dual app closes it when she moves; alpha: time) */
     int sel = (in->buttons >> 2) & 1;
-    if (sel && !lastSel && s.state == 2) { dancePopT = tick; prefs.dances++; prefsDirty = 1; }
+    if (sel && !lastSel && s.state == 2) {
+        dp.on = 1; dp.manual = 0; dp.t = tick; dp.x = s.x; dp.y = s.y; dp.map = s.map; prefs.dances++; prefsDirty = 1;
+        if (!beat.on) { beat.on = 1; beat.at = adFrames; beat.x = s.x; beat.y = s.y; beat.map = s.map; }
+    }
     lastSel = sel;
-    if (dancePopT >= 0 && tick - dancePopT > 30) dancePopT = -1;          /* link_draw runs ~6 times a second */
+    if (beat.on && ((in->buttons & ~4u) || s.map != beat.map || s.x != beat.x || s.y != beat.y)) beat.on = 0;   /* she moved or danced */
+    if (dp.on && !dp.manual) {                                  /* link_draw runs ~6 times a second */
+        int age = tick - dp.t, dx = s.x - dp.x, dy = s.y - dp.y;
+        if (age > 120 || s.map != dp.map || (age > 4 && (dx > 3 || dx < -3 || dy > 3 || dy < -3))) dp.on = 0;
+    }
     uint8_t sig[72]; memset(sig, 0, sizeof sig);
     memcpy(sig, &s, 64 < sizeof s ? 64 : sizeof s);
     readBoss(in, &s);
     sig[64] = bossHp[0]; sig[65] = bossMax[0]; sig[66] = bossHp[1]; sig[67] = bossMax[1];
-    sig[68] = page; sig[69] = dancePopT >= 0; sig[70] = in->fps; sig[71] = in->fps >> 8;
+    sig[68] = page; sig[69] = dp.on | adBusy() << 1; sig[70] = in->fps; sig[71] = in->fps >> 8;
     /* the map follows the camera and STATS counts the time: those are always drawn */
     if (!memcmp(sig, lastSig, sizeof sig) && tick > 1 && page == P_SHANTAE) return 0;
     memcpy(lastSig, sig, sizeof sig);
@@ -1093,7 +1391,6 @@ int link_draw(uint16_t *fb, const LinkIn *in) {
     rect(0, 0, LINK_W, LINK_H, BG);
     if (s.state != 2 && s.state != 5 && s.maxHearts == 0) {             /* title, file select: nothing to show yet */
         textC("SHANTAE DUAL 3DS", 160, 100, GOLD); textC("START OR CONTINUE A GAME", 160, 120, GREY);
-        if (in->fps) { char b[24]; snprintf(b, sizeof b, "%u", in->fps); textC(b, 160, 200, GREY); }
         gear(GEAR_X, GEAR_Y, LGREY);
         return 1;
     }
@@ -1106,7 +1403,7 @@ int link_draw(uint16_t *fb, const LinkIn *in) {
     gear(GEAR_X, GEAR_Y, LGREY);
     rect(0, 18, LINK_W, 1, SEL);
     if (page == P_SHANTAE) pageShantae(&s);
-    else if (page == P_PROGRESS) pageProgress(&s);
+    else if (page == P_PROGRESS) pageProgress(&s, in);
     else {
         if (!map_draw(fb, 0, 21, LINK_W, 199, in, drawIcon, mapTag)) textC(map_status(), 160, 116, GREY);
         else {                                                  /* the zoom level in the map's corner (tap to change) */
@@ -1116,11 +1413,14 @@ int link_draw(uint16_t *fb, const LinkIn *in) {
         mapCards(in, &s);
     }
     drawBoss();
-    if (dancePopT >= 0) dancePop(&s);
+    if (dp.on) dancePop(&s);
     /* tab bar */
     static const char *TABS[] = { "SHANTAE", "MAP", "PROGRESS" };
     for (int i = 0; i < 3; i++) { rect(i * 94, 222, 92, 18, i == page ? SEL : PANEL); textC(TABS[i], i * 94 + 46, 227, i == page ? WHITE : LGREY); }
-    if (in->fps) { snprintf(b, sizeof b, "%u", in->fps); textC(b, 301, 227, GREY); }
+    noteButton();
+#ifdef CTR_TEST
+    if (in->fps) { snprintf(b, sizeof b, "%u", in->fps); textR(b, 320, 227, GREY); }   /* scripted tests read the frame count here */
+#endif
     return 1;
 }
 
@@ -1134,8 +1434,13 @@ int link_tap(int x, int y, const LinkIn *in) {
         }
         return -1;
     }
-    if (y >= 222) { if (x < 282) { page = x / 94; memset(lastSig, 0xFF, sizeof lastSig); } return -1; }
-    if (dancePopT >= 0) { dancePopT = -1; memset(lastSig, 0xFF, sizeof lastSig); return -1; }
+    if (y >= 222) {
+        if (x < 282) page = x / 94;
+        else if (x < NOTE_X + NOTE_W + 2) { dp.on = !dp.on; dp.manual = 1; }   /* the note: the dance list */
+        memset(lastSig, 0xFF, sizeof lastSig);
+        return -1;
+    }
+    if (dp.on) { St s; readSt(in, &s); tapDancePop(x, y, &s); memset(lastSig, 0xFF, sizeof lastSig); return -1; }
     if (y < 18 && x >= 190) {                                   /* the dusk/dawn timer: the NIGHT card on the map */
         St s; readSt(in, &s);
         if (s.state == 2 || s.state == 5) { mcard = page == P_MAP && mcard == C_NIGHT ? C_NONE : C_NIGHT; page = P_MAP; memset(lastSig, 0xFF, sizeof lastSig); }
@@ -1153,23 +1458,27 @@ int link_tap(int x, int y, const LinkIn *in) {
         return -1;
     }
     if (page == P_PROGRESS) {
-        if (y >= 22 && y < 37) { int v = (x - 6) / 103; if (v >= 0 && v < 3 && v != prefs.progView) { prefs.progView = v; prefsDirty = 1; } }
+        if (y >= 22 && y < 37) { int v = (x - 6) / 77; if (x >= 6 && v < 4 && PROG_TAB[v] != prefs.progView) { prefs.progView = PROG_TAB[v]; prefsDirty = 1; } }
+        else if (prefs.progView == V_MONSTERS) tapMonsters(x, y);
         else if (prefs.progView == V_STORY && y >= 96 && y < 218) storyOpen = !storyOpen;
         else if (prefs.progView == V_STATS && y >= 192 && y < 214 && x >= 240) {
             if (statArm <= tick) statArm = tick + 24;           /* tap again within ~4 s */
             else {
-                int32_t b = prefs.borders, v = prefs.progView; uint8_t k[8]; memcpy(k, prefs.keys, sizeof k);
-                memset(&prefs, 0, sizeof prefs); prefs.borders = b; prefs.progView = v; prefs.since = (int64_t)time(NULL);
+                int32_t b = prefs.borders, v = prefs.progView; uint8_t k[8], nw = prefs.narrow; memcpy(k, prefs.keys, sizeof k);
+                memset(&prefs, 0, sizeof prefs); prefs.borders = b; prefs.progView = v; prefs.narrow = nw; prefs.since = (int64_t)time(NULL);
                 memcpy(prefs.keys, k, sizeof k);
                 prefsDirty = 1; statArm = 0;
             }
         }
         return -1;
     }
-    if (page == P_SHANTAE && y >= 56 && y < 122 && x >= 10 && x < 314) {
-        int i = ((y - 56) / 22) * 4 + (x - 10) / 76;
+    if (page == P_SHANTAE) {
         St s; readSt(in, &s);
-        if (i >= 0 && i < 12 && s.items[i] && (s.state == 2 || s.state == 5)) return i;
+        if (y >= FIG_Y && y < FIG_Y + 2 * ITEM_CH && x >= ITEM_X && x < ITEM_X + 6 * ITEM_CW) {   /* an item: equip it */
+            int i = (y - FIG_Y) / ITEM_CH * 6 + (x - ITEM_X) / ITEM_CW;
+            if (!s.items[i]) { itemMsgT = tick + 12; return -1; }
+            if (s.state == 2 || s.state == 5) return i;
+        } else if (y >= 148 && y < 164 && x >= ITEM_X) { dp.on = 1; dp.manual = 1; }   /* the dances: the list */
     }
     return -1;
 }
@@ -1193,7 +1502,7 @@ static void button(int x, int y, int w, int h, const char *label, int on) {
 static const char *const KEY3_NAME[KEY3_N] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "START", "SELECT" };
 static const char *const ACT_NAME[ACT_N] = { "GAME BOY A", "GAME BOY B", "START", "SELECT", "FAST-FORWARD" };
 #define SYS_ROW(i) (30 + (i) * 17)
-#define SET_ROW(i) (100 + (i) * 17)
+#define SET_ROW(i) (117 + (i) * 17)
 static void fpsLine(const LinkMenu *m) {                         /* the title bar: FPS, and the pictures shown if fewer */
     char b[32];
     if (!m->fps) return;
@@ -1208,22 +1517,24 @@ static void menuSettings(const LinkMenu *m) {
     gear(GEAR_X, GEAR_Y, GOLD);
     rect(0, 18, LINK_W, 1, SEL);
     int slow = !m->n3ds || prefs.old3ds;                        /* FRAME SKIP only acts at the old 3DS's speed */
-    frame(6, 26, 308, 62, "SYSTEM");
+    frame(6, 26, 308, 79, "SYSTEM");
     text("BORDERS", 16, SYS_ROW(0) + 4, INK);
     button(200, SYS_ROW(0), 108, 16, prefs.borders ? "ON" : "OFF", prefs.borders);
-    text("OLD 3DS SPEED", 16, SYS_ROW(1) + 4, m->n3ds ? INK : GREY);
-    button(200, SYS_ROW(1), 108, 16, !m->n3ds ? "NEW 3DS ONLY" : prefs.old3ds ? "ON" : "OFF", m->n3ds && prefs.old3ds);
-    text(slow ? "FRAME SKIP" : "FRAME SKIP (OLD SPEED)", 16, SYS_ROW(2) + 4, slow ? INK : GREY);
-    button(200, SYS_ROW(2), 108, 16, prefs.frameskip ? "ON" : "OFF", prefs.frameskip && slow);
-    frame(6, 92, 308, 96, listenAct >= 0 ? "PRESS ITS NEW BUTTON, TAP: CANCEL" : "BUTTONS: TAP ONE, PRESS A BUTTON");
+    text(m->n3ds && prefs.old3ds ? "WIDE VIEW (NEW SPEED)" : "WIDE VIEW", 16, SYS_ROW(1) + 4, slow ? GREY : INK);
+    button(200, SYS_ROW(1), 108, 16, !m->n3ds ? "NEW 3DS ONLY" : prefs.narrow ? "OFF" : "ON", !slow && !prefs.narrow);
+    text("OLD 3DS SPEED", 16, SYS_ROW(2) + 4, m->n3ds ? INK : GREY);
+    button(200, SYS_ROW(2), 108, 16, !m->n3ds ? "NEW 3DS ONLY" : prefs.old3ds ? "ON" : "OFF", m->n3ds && prefs.old3ds);
+    text(slow ? "FRAME SKIP" : "FRAME SKIP (OLD SPEED)", 16, SYS_ROW(3) + 4, slow ? INK : GREY);
+    button(200, SYS_ROW(3), 108, 16, prefs.frameskip ? "ON" : "OFF", prefs.frameskip && slow);
+    frame(6, 109, 308, 96, listenAct >= 0 ? "PRESS ITS NEW BUTTON, TAP: CANCEL" : "BUTTONS: TAP ONE, PRESS A BUTTON");
     for (int i = 0; i < ACT_N; i++) {
         int y = SET_ROW(i), lis = listenAct == i;
         text(ACT_NAME[i], 16, y + 4, INK);
         button(200, y, 108, 16, lis ? "PRESS ONE" : KEY3_NAME[link_key(i)], 1);
         if (lis) { rect(200, y, 108, 1, GOLD); rect(200, y + 15, 108, 1, GOLD); }
     }
-    button(8, 194, 98, 24, "DEFAULTS", 1);
-    button(214, 194, 98, 24, "BACK", 1);
+    button(8, 208, 98, 18, "DEFAULTS", 1);
+    button(214, 208, 98, 18, "BACK", 1);
     if (m->msGb) {                                              /* the timing: what a frame costs, against 16.7 ms */
         snprintf(b, sizeof b, "GB %d.%d TOP %d.%d LINK %d.%d MAX %d.%d MS", m->msGb / 10, m->msGb % 10, m->msTop / 10,
                  m->msTop % 10, m->msLink / 10, m->msLink % 10, m->msMax / 10, m->msMax % 10);
@@ -1286,10 +1597,11 @@ int link_menu_tap(int x, int y, const LinkMenu *m) {
     if (menuPage) {                                             /* SETTINGS */
         if (listenAct >= 0) { listenAct = -1; return MENU_REDRAW; }   /* a tap cancels */
         if (y >= 26 && y < SYS_ROW(1) && x >= 196) return MENU_BORDERS;
-        if (y >= SYS_ROW(1) && y < SYS_ROW(2) && x >= 196) return m->n3ds ? MENU_OLD3DS : MENU_NONE;
-        if (y >= SYS_ROW(2) && y < 88 && x >= 196) return MENU_FRAMESKIP;
+        if (y >= SYS_ROW(1) && y < SYS_ROW(2) && x >= 196) return m->n3ds ? MENU_WIDE : MENU_NONE;
+        if (y >= SYS_ROW(2) && y < SYS_ROW(3) && x >= 196) return m->n3ds ? MENU_OLD3DS : MENU_NONE;
+        if (y >= SYS_ROW(3) && y < 105 && x >= 196) return MENU_FRAMESKIP;
         for (int i = 0; i < ACT_N; i++) if (y >= SET_ROW(i) && y < SET_ROW(i) + 17 && x >= 120) { listenAct = i; return MENU_REDRAW; }
-        if (y >= 192 && y < 222) {
+        if (y >= 206 && y < 228) {
             if (x < 109) { memset(prefs.keys, 0, sizeof prefs.keys); prefsDirty = 1; return MENU_REDRAW; }
             if (x >= 212) { menuPage = 0; return MENU_REDRAW; }
         }

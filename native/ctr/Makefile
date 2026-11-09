@@ -10,7 +10,7 @@ ROOT		:= $(abspath ../..)
 OUT		?= $(ROOT)/out/ctr
 OBJDIR		?= $(OUT)/obj
 # test builds (test/build_test.sh): EXTRA="-DCTR_TEST -I<dir with test_script.h>", OUT elsewhere
-VERSION		:= 0.13-alpha
+VERSION		:= 0.16-alpha
 
 PREFIX		:= $(DEVKITARM)/bin/arm-none-eabi-
 CC		:= $(PREFIX)gcc
@@ -25,7 +25,7 @@ LDFLAGS		:= -specs=3dsx.specs $(ARCH) -Wl,--gc-sections -L$(DEVKITPRO)/libctru/l
 
 CORE_CXX	:= $(filter-out %/libretro/libretro.cpp,$(SOURCES_CXX))
 OBJS		:= $(patsubst $(GAMBATTE)/%.cpp,$(OBJDIR)/%.o,$(CORE_CXX)) $(patsubst $(GAMBATTE)/%.c,$(OBJDIR)/%.o,$(SOURCES_C)) \
-		   $(OBJDIR)/gbglue.o $(OBJDIR)/gbcore.o $(OBJDIR)/extract.o $(OBJDIR)/main.o $(OBJDIR)/linkscr.o $(OBJDIR)/linkmap.o
+		   $(OBJDIR)/gbglue.o $(OBJDIR)/gbcore.o $(OBJDIR)/extract.o $(OBJDIR)/wide.o $(OBJDIR)/main.o $(OBJDIR)/linkscr.o $(OBJDIR)/linkmap.o
 
 all: $(OUT)/Shantae\ Dual\ 3DS.3dsx
 
@@ -42,6 +42,8 @@ $(OBJDIR)/gbcore.o: ../gbcore.c
 	$(CC) $(CFLAGS) -std=gnu99 -c $< -o $@
 $(OBJDIR)/extract.o: ../extract.c
 	$(CC) $(CFLAGS) -std=gnu99 -c $< -o $@
+$(OBJDIR)/wide.o: ../wide.c ../gbcore.h
+	$(CC) $(CFLAGS) -O3 -std=gnu99 -c $< -o $@
 $(OBJDIR)/main.o: main.c linkscr.h
 	$(CC) $(CFLAGS) -std=gnu99 -c $< -o $@
 $(OBJDIR)/linkscr.o: linkscr.c linkscr.h
@@ -56,7 +58,7 @@ $(OUT)/icon.png: $(ROOT)/app/res/mipmap-xhdpi/ic_launcher.png
 	convert $< -filter point -resize 48x48 $@
 
 $(OUT)/shantaedual3ds.smdh: $(OUT)/icon.png
-	$(DEVKITPRO)/tools/bin/smdhtool --create "Shantae Dual 3DS" "$(VERSION): Shantae (USA) + a Link screen" "Jack" $< $@
+	$(DEVKITPRO)/tools/bin/smdhtool --create "Shantae Dual 3DS" "$(VERSION): Shantae (USA) + a Link screen. Wide view: polyformproject.org/licenses/noncommercial/1.0.0" "Jack" $< $@
 
 $(OUT)/Shantae\ Dual\ 3DS.3dsx: $(OUT)/shantaedual3ds.elf $(OUT)/shantaedual3ds.smdh
 	$(DEVKITPRO)/tools/bin/3dsxtool $< "$@" --smdh=$(OUT)/shantaedual3ds.smdh

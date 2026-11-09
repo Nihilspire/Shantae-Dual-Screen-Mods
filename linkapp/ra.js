@@ -195,9 +195,10 @@
   // ------------------------------------------------------------------ video snapshot (Shantae Dual's Native.video layout)
   // VRAM bank 0 | bank 1 | BG palettes 64 | OBJ palettes 64 | OAM 160 | LCDC SCY SCX WY WX  (0x4125 bytes, base64)
   var vid = '', vidAt = 0, holdAt = 0, vidFull = false;   // vidFull: bank-1 tiles and BG attributes both stood in
+  var fullMs = 200;                                       // how often the blocks behind a snapshot change (pacing, below)
   function video() {
     var now = Date.now();
-    if (vid && now - vidAt < 90) return vid;
+    if (vid && now - vidAt < fullMs - 10) return vid;
     var v0 = readRange(0x8000, 0x2000), pal = readRange(0xC400, 0x80), io = readRange(0xFF00, 0x80);
     if (!v0 || !pal || !io) return vid;
     var out = new Uint8Array(0x4125), lcdc = io[0x40];
@@ -251,14 +252,24 @@
 
   // ------------------------------------------------------------------ Select -> dance list; GBA mode
   var sel = 0, gba = null;
+  // Pacing (0.10, as Xenogears Link): position, camera, state and HRAM are read often, everything else (VRAM above all)
+  // less often. Hot stays at 100 ms or faster everywhere, because the Select byte is in HRAM.
+  var mapOn = false, moveAt = 0, lastPos = '', pace = '';
+  if (R.setHot) R.setHot('c300,c900,cb00,ff80');              // $C39D, $C9E9.. camera, $CB43.. Shantae, $FF8B
+  function moving() { return Date.now() - moveAt < 1500; }
   setInterval(function () {
     if (problem()) return;
-    var h = readAddrs([0xFF8B, 0xFFFE, 0xC39D]);
+    var h = readAddrs([0xFF8B, 0xFFFE, 0xC39D, 0xCB43, 0xCB44, 0xCB45, 0xCB46, 0xC9FB, 0xC9FC, 0xC9FD, 0xC9FE]);
     if (!h) return;
     if (h[1] === 3) gba = true; else if (h[1] === 1) gba = false;
     var s = h[0] & 4;
     if (s && !sel && h[2] === 2 && window.onSelect) window.onSelect();
     sel = s;
+    var pos = toHex(h.subarray(3));
+    if (pos !== lastPos) { lastPos = pos; moveAt = Date.now(); }
+    var hotMs = mapOn && moving() ? 50 : 100;
+    fullMs = !mapOn ? 300 : moving() ? 250 : 200;
+    if (hotMs + ':' + fullMs !== pace) { pace = hotMs + ':' + fullMs; if (R.setPace) R.setPace(hotMs, fullMs); }
   }, 100);
 
   // ------------------------------------------------------------------ save state slots (RetroArch's own)
@@ -267,6 +278,10 @@
 
   window.Native = {
     ra: true,
+    mapOn: function (on) { mapOn = !!on; },
+    moving: moving,
+    beat: function (s) { if (R.beat) R.beat(s); },                    // freeze report (MainActivity)
+    lastHang: function () { return R.lastHang ? R.lastHang() : ''; },
     version: function () { return R.version(); },
     running: function () { return !problem(); },
     raStatus: function () { var s = status(); return { problem: problem(), state: s.state || '', game: s.game || '', version: s.version || '',

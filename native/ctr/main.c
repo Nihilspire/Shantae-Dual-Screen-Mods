@@ -2,8 +2,8 @@
  * (linkscr.c) on the bottom touch screen. libctru only (no citro): both screens are RGB565 framebuffers.
  *
  * The player's ROM (Shantae (USA), CRC32 E994B59B) goes in the same folder as the .3dsx: shantae.gbc, or any .gbc that
- * is Shantae (USA). sdmc:/3ds/shantae-dual/shantae.gbc (0.1-0.4) still works. The battery save, state and captured
- * icons are written next to the ROM. Nothing from the game ships in the .3dsx.
+ * is Shantae (USA). sdmc:/3ds/shantae-dual/shantae.gbc (0.1-0.4) still works. The battery save, states, settings and
+ * monsters met are written next to the ROM. Nothing from the game ships in the .3dsx.
  *
  * Controls: D-pad, A, B, Start, Select as on the Game Boy. R held: fast-forward (3x, no sound). A, B, Start, Select and
  * fast-forward can be moved to other buttons on the menu's SETTINGS page. L+X / L+Y: save / load state slot 1.
@@ -23,7 +23,7 @@
 
 #define OLD_DIR "sdmc:/3ds/shantae-dual"  /* where 0.1-0.4 looked */
 #define ROM_CRC 0xE994B59Bu
-static char ROMDIR[256], ROM[320], SRM[320], STATE[320], ICONS[320], PREFS[320], HALL[320];   /* set by findRom() */
+static char ROMDIR[256], ROM[320], SRM[320], STATE[320], MONS[320], PREFS[320], HALL[320];   /* set by findRom() */
 #define BTN(x) (1u << (x))           /* libretro joypad ids: B 0, SELECT 2, START 3, UP 4, DOWN 5, LEFT 6, RIGHT 7, A 8 */
 /* the 3DS buttons in linkscr.h's KEY3_* order (ZL and ZR: New 3DS only) */
 static const u32 KEY3[KEY3_N] = { KEY_A, KEY_B, KEY_X, KEY_Y, KEY_L, KEY_R, KEY_ZL, KEY_ZR, KEY_START, KEY_SELECT };
@@ -38,14 +38,21 @@ static int vram(unsigned b, unsigned o) { return gb_vram(b, o); }
 /* ------------------------------------------------------------------ screens */
 /* 3DS framebuffers are stored rotated: pixel (x, y) of a 400x240 / 320x240 screen at fb[x * 240 + 239 - y]. */
 static void drawTop(const uint16_t *gb, int w, int h) {
-    /* source rows/columns for the 1.5x scale, worked out once: the ARM11 has no divide instruction */
-    static int rowOff[216], colOf[240], tw = -1;
-    if (tw != w) { for (int y = 0; y < 216; y++) rowOff[y] = (y * 2 / 3) * w; for (int x = 0; x < 240; x++) colOf[x] = x * 2 / 3; tw = w; }
+    /* source rows/columns for the 1.5x scale, worked out when the width changes: the ARM11 has no divide instruction */
+    static int rowOff[216], colOf[400], tw = -1;
+    const int cols = w > 160 ? 400 : 240;                           /* WIDE VIEW fills the screen, cropping what's over at each side */
+    if (tw != w) {
+        const int crop = w > 160 ? (w * 3 / 2 - 400) / 2 : 0;
+        for (int y = 0; y < 216; y++) rowOff[y] = (y * 2 / 3) * w;
+        for (int x = 0; x < cols; x++) colOf[x] = (x + crop) * 2 / 3;
+        tw = w;
+    }
     uint16_t *fb = (uint16_t *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-    const int ox = (400 - 240) / 2, oy = (240 - 216) / 2;           /* 160x144 at 1.5x = 240x216, centred */
-    for (int x = 0; x < 240; x++) {
+    const int ox = (400 - cols) / 2, oy = (240 - 216) / 2;          /* 160x144 at 1.5x = 240x216, centred */
+    for (int x = 0; x < cols; x++) {
         const uint16_t *col = gb + colOf[x];
         uint16_t *dst = fb + (ox + x) * 240 + 239 - oy;
+        if (x && colOf[x] == colOf[x - 1]) { memcpy(dst - 215, dst - 240 - 215, 216 * 2); continue; }   /* every third column repeats */
         for (int y = 0; y < 216; y++) dst[-y] = col[rowOff[y]];
     }
     (void)h;
@@ -135,7 +142,7 @@ static int saveState(int slot, const char *place) {
     slotPath(p, sizeof p, "st", slot);
     if (b && gb_state_save(b, n)) { FILE *f = fopen(p, "wb"); if (f) { ok = fwrite(b, 1, n, f) == n; fclose(f); } }
     free(b);
-    int w, h, fresh; const uint16_t *pic = gb_frame(&w, &h, &fresh);
+    int w; const uint16_t *pic = gb_native(&w);                    /* the real screen, not WIDE VIEW's */
     if (ok && pic) {                                               /* the picture: every other pixel of the game screen */
         for (int y = 0; y < THUMB_H; y++) for (int x = 0; x < THUMB_W; x++) thumbs[slot][y * THUMB_W + x] = pic[y * 2 * w + x * 2];
         char pl[24] = { 0 }; snprintf(pl, sizeof pl, "%s", place);
@@ -173,7 +180,8 @@ static void usePath(const char *dir, const char *name) {
     snprintf(ROM, sizeof ROM, "%s/%s", dir, name);
     snprintf(SRM, sizeof SRM, "%s/shantae.srm", dir);
     snprintf(STATE, sizeof STATE, "%s/shantae", dir);               /* + .st1-.st3 and .th1-.th3 */
-    snprintf(ICONS, sizeof ICONS, "%s/shantae-icons.bin", dir);   /* the inventory icons, from the player's own game */
+    snprintf(MONS, sizeof MONS, "%s/shantae-monsters.bin", dir);  /* the monsters met */
+    { char old[320]; snprintf(old, sizeof old, "%s/shantae-icons.bin", dir); remove(old); }   /* 0.5-0.13: icons now come from the ROM */
     snprintf(PREFS, sizeof PREFS, "%s/shantae-link.cfg", dir);    /* settings and the STATS counts */
     snprintf(HALL, sizeof HALL, "%s/shantae-endings.bin", dir);   /* signed ending cards, appended */
 }
@@ -216,6 +224,7 @@ static void waitExit(const char *msg) {
 }
 
 #define SCREEN_HZ 59.83                                            /* the 3DS screen's refresh */
+#define WIDE_W 268                                                 /* WIDE VIEW: 268 x 1.5 = 402, a pixel over at each side of the 400 */
 static struct { u64 gb, top, link, max; int nGb, n; } tm;           /* the frame timing (ticks) over the last second */
 
 /* New 3DS: 804 MHz, the L2 cache and NO SLOWDOWN, unless OLD 3DS SPEED is on (268 MHz, no cache, no overclock: the
@@ -224,6 +233,7 @@ static void applySpeed(bool n3ds) {
     int old = link_old3ds(-1);
     osSetSpeedupEnable(!old);
     gb_set_overclock(n3ds && !old && gb_overclock_supported());   /* NO SLOWDOWN: New 3DS only, the old one has no spare */
+    gb_view(n3ds && !old && link_wide(-1) ? WIDE_W : 160, 144);    /* WIDE VIEW likewise */
 }
 
 int main(int argc, char **argv) {
@@ -247,7 +257,7 @@ int main(int argc, char **argv) {
 #endif
     if (gb_load_mem(rom, romLen, ROM)) { waitExit("  The core could not load the ROM."); gfxExit(); return 0; }
     /* rom stays: the Link screen's map reads the level data from it */
-    { size_t n; uint8_t *ic = readFile(ICONS, &n); if (ic) { link_icons_load(ic, n); free(ic); } }
+    { size_t n; uint8_t *mf = readFile(MONS, &n); if (mf) { link_monsters_load(mf, n); free(mf); } }
     { size_t n; uint8_t *pf = readFile(PREFS, &n); if (pf) { link_prefs_load(pf, n); free(pf); } }
     gb_sram_load(SRM);
     applySpeed(n3ds);
@@ -262,7 +272,7 @@ int main(int argc, char **argv) {
     static uint16_t link[LINK_W * LINK_H];
     static int16_t snd[16384];
     LinkIn in = { peek, wram, vram, gb_cgbpal, rom, romLen, 0, 0 };
-    static uint8_t iconBuf[32768];
+    static uint8_t monBuf[LINK_MONSTERS_MAX];
     static uint16_t border[400 * 240];
     int borderCopies = 0;
     u64 secAt = osGetTime(); int frames = 0, frame = 0, msgT = 0;
@@ -330,6 +340,8 @@ int main(int argc, char **argv) {
                 link_old3ds(!link_old3ds(-1)); applySpeed(n3ds); savePrefs();
             } else if (act == MENU_FRAMESKIP) {
                 link_frameskip(!link_frameskip(-1)); savePrefs();
+            } else if (act == MENU_WIDE) {
+                link_wide(!link_wide(-1)); applySpeed(n3ds); savePrefs();
             } else if (act == MENU_RESUME) menuOpen = 0;
             if (!menuOpen) { in.buttons = 0; link_draw(link, &in); drawBottom(link); }
             else if (act != MENU_NONE) { link_menu_draw(link, &menu); drawBottom(link); }
@@ -364,6 +376,8 @@ int main(int argc, char **argv) {
         if (!ff && link_frameskip(-1) && (!n3ds || link_old3ds(-1)))
             while (runs < 4 && runs * avgGb + avgOther + SYSCLOCK_ARM11 / 1000.0 > runs * (SYSCLOCK_ARM11 / SCREEN_HZ)) runs++;
         for (int r = 0; r < runs; r++) {
+            gb_set_pad(pad | link_dance_pad());                    /* auto dance: on the game's own frames */
+            gb_wide_skip(r < runs - 1);                            /* only the last is shown */
             gb_run(); frames++;
             int n = gb_audio(snd, 16384);
             if (!ff) soundPush(snd, n);
@@ -371,8 +385,16 @@ int main(int argc, char **argv) {
         u64 t1 = svcGetSystemTick();
         link_work(&in);                                            /* inventory icons; a new room's map, a slice a frame */
         u64 t2 = svcGetSystemTick();
-        if (borderCopies) { drawBorder(border); borderCopies--; }  /* both of the top screen's buffers get it */
         int w, h, fresh; const uint16_t *pic = gb_frame(&w, &h, &fresh);
+        /* WIDE VIEW covers the side borders: black above and below it, and the borders back when the real picture is alone */
+        static int shownW = 160, topClears;
+        if (pic && w != shownW) {
+            shownW = w;
+            if (w > 160 || !link_borders(-1)) topClears = 2; else borderCopies = 2;
+        }
+        if (shownW > 160) borderCopies = 0;
+        if (topClears) { memset(gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL), 0, 400 * 240 * 2); topClears--; }
+        if (borderCopies) { drawBorder(border); borderCopies--; }  /* both of the top screen's buffers get it */
         if (pic) drawTop(pic, w, h);
         u64 t3 = svcGetSystemTick();
 
@@ -383,8 +405,8 @@ int main(int argc, char **argv) {
         } else if (dragX || dragY) { in.buttons = pad; if (link_draw(link, &in)) drawBottom(link); }   /* follow the stylus */ else if (pad & BTN(2)) { in.buttons = pad; if (link_draw(link, &in)) drawBottom(link); }   /* catch Select taps */
         if (frame % 600 == 0) {
             gb_sram_save(SRM, 0);                                  /* battery save: written only when it changed */
-            size_t n = link_icons_save(iconBuf, sizeof iconBuf);   /* newly captured icons */
-            if (n) { FILE *f = fopen(ICONS, "wb"); if (f) { fwrite(iconBuf, 1, n, f); fclose(f); } }
+            size_t n = link_monsters_save(monBuf, sizeof monBuf);  /* newly met monsters */
+            if (n) { FILE *f = fopen(MONS, "wb"); if (f) { fwrite(monBuf, 1, n, f); fclose(f); } }
             savePrefs();                                           /* the STATS counts */
         }
         u64 t4 = svcGetSystemTick();
@@ -415,6 +437,7 @@ int main(int argc, char **argv) {
     }
     gb_sram_save(SRM, 1);
     savePrefs();
+    { size_t n = link_monsters_save(monBuf, sizeof monBuf); if (n) { FILE *f = fopen(MONS, "wb"); if (f) { fwrite(monBuf, 1, n, f); fclose(f); } } }
     if (haveSound) ndspExit();
     gb_unload();
     gfxExit();

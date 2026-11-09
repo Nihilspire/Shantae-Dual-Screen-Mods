@@ -10,11 +10,22 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.view.View;
+import java.nio.ByteBuffer;
 
 /** Draws the Game Boy picture, plus game-themed borders in the space left around it on wide screens. */
 final class GameView extends View {
     final Object lock = new Object();
-    Bitmap frame;                       // written by the emulation thread under lock
+    // The emulation thread only hands over pixels (post). Bitmaps are written here on the UI thread, just before they're
+    // drawn: Android's render thread reads a Bitmap on its own schedule, so writing one from the emulation thread could
+    // show half a new frame. One picture per draw, oldest first, keeps the steps even while scrolling (FrameQueue).
+    private final FrameQueue queue = new FrameQueue(Native.PIC_W * Native.PIC_H * 2);
+    private final Bitmap[] frames = new Bitmap[3];
+    private int bmpIdx;
+    private Bitmap frame;
+    boolean wideOn = true;
+    final boolean recomp = Native.backend() == 1;
+    int viewRows = 144;                 // recomp: rows of world the player asked for (VIEW SIZE)
+    volatile int wantW, wantH;          // the picture that fills this view (WIDE VIEW), read by the emulation thread
     String aspect = "square";           // "square" (GB pixels are square, 10:9) or "stretch"
     boolean bezels = true, hud = true, integer = false, showStats = false;
     MainActivity host;
@@ -41,6 +52,25 @@ final class GameView extends View {
         setBackgroundColor(0xFF000000);
     }
 
+    /** The emulation thread's new picture: px is w x h RGB565. */
+    void post(ByteBuffer px, int w, int h) {
+        synchronized (lock) { queue.put(px, w, h); }
+        postInvalidateOnAnimation();
+    }
+    void clearFrame() {
+        synchronized (lock) { frame = null; queue.clear(); }
+    }
+    /** Under lock, on the UI thread: the next picture into bitmaps the render thread isn't drawing from. */
+    private void takePending() {
+        FrameQueue.Slot q = queue.take();
+        if (q == null) return;
+        bmpIdx = (bmpIdx + 1) % 3;
+        Bitmap b = frames[bmpIdx];
+        if (b == null || b.getWidth() != q.w || b.getHeight() != q.h) b = frames[bmpIdx] = Bitmap.createBitmap(q.w, q.h, Bitmap.Config.RGB_565);
+        q.pic.rewind(); b.copyPixelsFromBuffer(q.pic);
+        frame = b;
+    }
+
     void layoutGame(int w, int h) {
         float W = getWidth(), H = getHeight();
         if (W <= 0 || H <= 0) return;
@@ -52,9 +82,21 @@ final class GameView extends View {
         dst.set(Math.round(x), Math.round(y), Math.round(x + gw), Math.round(y + gh));
     }
 
+    /** WIDE VIEW: as wide as this view's shape allows at the rows asked for, even, so whole pixels stay centred. */
+    private void wantPicture() {
+        int W = getWidth(), H = getHeight();
+        if (W <= 0 || H <= 0) return;
+        int rows = wideOn && recomp ? Math.min(viewRows, Native.PIC_H) : 144;
+        int w = wideOn && !aspect.equals("stretch") ? (rows * W / H) & ~1 : 160;
+        wantW = Math.max(160, Math.min(Native.PIC_W, w)); wantH = rows;
+    }
+
     @Override protected void onDraw(Canvas c) {
         Bitmap f;
+        wantPicture();
         synchronized (lock) {
+            takePending();
+            if (queue.waiting()) postInvalidateOnAnimation();   // the next refresh has one to show as well
             f = frame;
             if (f == null) { c.drawColor(0xFF000000); return; }
             src.set(0, 0, f.getWidth(), f.getHeight());

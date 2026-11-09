@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.view.View;
@@ -29,7 +31,7 @@ import java.util.zip.CRC32;
  * the font and the signposts.
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "0.8";
+    static final String VERSION = "0.12";
     static final long ROM_CRC = 0xE994B59BL;
     static final int PICK_ROM = 1;
 
@@ -39,6 +41,47 @@ public class MainActivity extends Activity {
     File romFile;
     volatile String romName = "";
     volatile long romCrc;
+    /* Freeze report (0.9, as Xenogears Link 2.0.0.18): the page says what it is working on (Bridge.beat); a thread checks
+       that and Android's main thread once a second. If either stops for 4 s while the app is on screen, what it was doing
+       is kept and the page shows it on the next start. An "isn't responding" dialog with no report afterwards means
+       nothing stalled: it comes from input Android is holding for this never-focused window. */
+    volatile String beatStage = "";
+    volatile long beatAt, uiAt;
+    volatile boolean watching, hangKept;
+    final Handler ui = new Handler(Looper.getMainLooper());
+
+    /** 0.11: if the last run ended with the player tapping Close on Android's "isn't responding" dialog, Android's reason
+     *  (Android 11+, once per exit). "NO FOCUSED WINDOW" = a key waiting on this never-focused window, nothing stalled. */
+    String lastAnr() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return "";
+        try {
+            java.util.List<android.app.ApplicationExitInfo> l = ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).getHistoricalProcessExitReasons(null, 0, 1);
+            if (l.isEmpty()) return "";
+            android.app.ApplicationExitInfo e = l.get(0);
+            if (e.getTimestamp() <= prefs.getLong("exitSeen", 0)) return "";
+            prefs.edit().putLong("exitSeen", e.getTimestamp()).apply();
+            if (e.getReason() != android.app.ApplicationExitInfo.REASON_ANR) return "";
+            String d = e.getDescription() == null ? "" : e.getDescription();
+            prefs.edit().putString("anrText", d).apply();           // the whole text, for anyone reading it later
+            return d.contains("focused window") ? "ANDROID: NO FOCUSED WINDOW" : "ANDROID: " + d;
+        } catch (Exception x) { return ""; }
+    }
+
+    void startWatch() {
+        Thread t = new Thread(new Runnable() { public void run() {
+            while (true) {
+                try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
+                if (!watching) continue;
+                ui.post(new Runnable() { public void run() { uiAt = System.currentTimeMillis(); } });
+                long now = System.currentTimeMillis();
+                String what = now - uiAt > 4000 ? "android main thread" : beatAt > 0 && now - beatAt > 4000 ? "page: " + beatStage : null;
+                if (what == null) hangKept = false;
+                else if (!hangKept) { hangKept = true; prefs.edit().putString("hang", what).commit(); }
+            }
+        } }, "freeze-watch");
+        t.setDaemon(true);
+        t.start();
+    }
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -62,10 +105,15 @@ public class MainActivity extends Activity {
         setContentView(web);
         web.loadUrl("file:///android_asset/link/index.html");
         immersive();
+        startWatch();
     }
 
-    @Override protected void onStart() { super.onStart(); ra.start(); }
-    @Override protected void onStop() { ra.stop(); super.onStop(); }
+    @Override protected void onStart() {
+        super.onStart(); ra.start();
+        uiAt = System.currentTimeMillis(); if (beatAt > 0) beatAt = uiAt;   // beatAt stays 0 until the page's first beat
+        watching = true;
+    }
+    @Override protected void onStop() { watching = false; ra.stop(); super.onStop(); }
     @Override public void onWindowFocusChanged(boolean f) { super.onWindowFocusChanged(f); if (f) immersive(); }
 
     void immersive() {
@@ -127,7 +175,16 @@ public class MainActivity extends Activity {
     /** window.RA: the transport ra.js builds window.Native on. */
     final class Bridge {
         @JavascriptInterface public String version() { return VERSION; }
+        @JavascriptInterface public void beat(String stage) { beatStage = stage == null ? "" : stage; beatAt = System.currentTimeMillis(); }
+        /** What had stalled last time ("" if nothing); read once. */
+        @JavascriptInterface public String lastHang() {
+            String a = lastAnr();                    // Android's own reason wins: it says which kind of "isn't responding"
+            if (!a.isEmpty()) return a;
+            String h = prefs.getString("hang", ""); if (!h.isEmpty()) prefs.edit().remove("hang").commit(); return h;
+        }
         @JavascriptInterface public String read(String csv) { return ra.read(csv); }
+        @JavascriptInterface public void setPace(int hotMs, int fullMs) { ra.setPace(hotMs, fullMs); }
+        @JavascriptInterface public void setHot(String csv) { ra.setHot(csv); }
         @JavascriptInterface public String status() { return ra.status(); }
         @JavascriptInterface public void send(String cmd) { if (cmd != null && cmd.matches("[A-Z_]+( [0-9]+)?")) ra.send(cmd); }
         /** "CMD|CMD|..." sent one at a time, gapMs apart (hotkey commands such as STATE_SLOT_PLUS). */

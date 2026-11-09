@@ -140,7 +140,15 @@
   // ------------------------------------------------------------------ layout
   function resize() {
     var r = innerWidth / Math.max(1, innerHeight);
-    if (r >= 1.3) { H = 240; W = Math.round(240 * r); } else { W = 256; H = Math.round(256 / r); }
+    if (DUAL && N.panelOn && N.panelOn()) {                  // SINGLE SCREEN's panel: whole screen pixels per page pixel, so the font stays even
+      var d = window.devicePixelRatio || 1, pw = Math.round(innerWidth * d), ph = Math.round(innerHeight * d);
+      var n = Math.max(1, Math.min(Math.floor(ph / 240), Math.floor(pw / 256)));
+      W = Math.floor(pw / n); H = Math.floor(ph / n);
+      cv.style.width = (W * n / d) + 'px'; cv.style.height = (H * n / d) + 'px';
+    } else {
+      cv.style.width = cv.style.height = '';
+      if (r >= 1.3) { H = 240; W = Math.round(240 * r); } else { W = 256; H = Math.round(256 / r); }
+    }
     cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
     var tabH = 16;
     layout.tabY = H - tabH;
@@ -163,17 +171,24 @@
   window.onLayout = resize;
 
   // ------------------------------------------------------------------ polling
+  // Freeze report (Shantae Link 0.9, as Xenogears Link): the app keeps the stage the page was last in if it stops for 4 s
+  function stage(s) { if (N && N.beat) N.beat(s); }
+  var hangMsg = N && N.lastHang ? N.lastHang() : '';
   function tick() {
     tickN++;
-    loadRom();
+    stage('rom'); loadRom();
+    stage('read');
     var hex = N && N.running && N.running() ? N.mem(S.SPEC) : '';
     st = hex && hex.length >= 2 * S.SPEC_LEN ? S.parse(hex) : null;
     trackStats(); readBoss(); readCredits();
+    stage('monsters');
     if (st && window.ShantaeMonsters && N && N.rom) ShantaeMonsters.update(N, st);
     if (st && window.ShantaeMap && ShantaeMap.setNight) ShantaeMap.setNight(st.night, ((st.night ? 0x10000 : 0x8000) - st.time) / 4);
-    buildIcons();
+    stage('icons'); buildIcons();
+    stage('map');
     if (window.ShantaeMap && (tab === 'world' && worldView === 'map' || tickN % 5 === 0)) ShantaeMap.update(N, !!st);   // every tick on the map; kept warm otherwise
-    draw();
+    stage('draw'); draw();
+    stage('idle');
   }
   window.onSession = window.onRom = function () { signs = null; if (window.ShantaeMap) ShantaeMap.reset(); loadRom(); draw(); };
   window.onDev = function () { draw(); };
@@ -236,6 +251,7 @@
     autoDance = { i: i, until: Date.now() + (20 + 64 * keys.length) * 17 };
     stats.dances++; statsDirty = true;                    // the host's onSelect only sees the player's own Select
     dancePop = null;
+    if (N.panelOn && N.panelOn() && N.panel) N.panel(false);   // SINGLE SCREEN: out of the way, to watch the dance
   }
   var NOTE = ['....####', '....#..#', '....#..#', '....#..#', '..###.##', '.####.##', '.####...', '..##....'];
   function noteButton(x, y) {
@@ -924,6 +940,14 @@
     if (s.version) G.textC(ctx, ('RETROARCH ' + s.version).substr(0, Math.floor(W / 8)), W / 2, H - 12, C.grey);
   }
   function draw() {
+    drawPage();
+    if (!hangMsg) return;
+    ctx.fillStyle = C.dred; ctx.fillRect(0, 0, W, 24);
+    G.textC(ctx, 'THE APP FROZE LAST TIME: TAP', W / 2, 3, C.white);
+    G.textC(ctx, hangMsg.toUpperCase().substr(0, Math.floor(W / 8)), W / 2, 13, C.gold);
+    tap(0, 0, W, 24, function () { hangMsg = ''; });
+  }
+  function drawPage() {
     buttons = [];
     if (!st) {
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
@@ -960,7 +984,7 @@
     if (dancePop) drawDancePop();
   }
 
-  function logical(e) { return [Math.floor(e.clientX * W / innerWidth), Math.floor(e.clientY * H / innerHeight)]; }
+  function logical(e) { var r = cv.getBoundingClientRect(); return [Math.floor((e.clientX - r.left) * W / r.width), Math.floor((e.clientY - r.top) * H / r.height)]; }
   // A tap acts on pointer down, except on areas that can also be dragged (the map): those act on release if the
   // finger didn't move, and pass the movement on while it does.
   var drag = null;
@@ -997,4 +1021,10 @@
   if (tab === 'dances') tab = 'world';                                  // 0.15: dances pop up on Select
   loadRom(); resize();
   setInterval(tick, 100);
+  // Shantae Link 0.10: between ticks, while she moves on the map, just the marker and camera (as Xenogears Link's light polls)
+  if (RA) setInterval(function () {
+    var on = tab === 'world' && worldView === 'map';
+    N.mapOn(on);
+    if (on && st && N.moving() && window.ShantaeMap && ShantaeMap.track(N)) { stage('draw'); draw(); stage('idle'); }
+  }, 50);
 })();

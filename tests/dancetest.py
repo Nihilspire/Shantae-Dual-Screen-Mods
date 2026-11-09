@@ -13,7 +13,13 @@ from playwright.sync_api import sync_playwright
 
 W = '/home/claude/work/dancetest'; os.makedirs(W, exist_ok=True)
 ST = W + '/a14.st'
-if not os.path.exists(ST):
+# Recomp build (native/recomp): DANCE_RECOMP="opt lines" runs the same on its driver, from recomptest.py's play state with
+# every dance poked in; its options go first in each script, "" for upstream's defaults
+OPTS = os.environ.get('DANCE_RECOMP')
+if OPTS is not None:
+    SR.DRIVE = SR.ROOT + '/out/recomp/host/drive'; W = '/home/claude/work/rc'; ST = W + '/a14.st'; OPTS = OPTS.replace(';', '\n') + '\n'
+    subprocess.run([SR.DRIVE, SR.ROMF, '-'], input='view 256\nload %s/play.st\nrun 2\npoke CB3A FF\npoke CB3B 07\nrun 2\nsave %s\ndump %s/a14.bin\n' % (W, ST, W), capture_output=True, text=True)
+elif not os.path.exists(ST):
     subprocess.run([SR.DRIVE, SR.ROMF, '-'], input='load /home/claude/work/st/d4.st\nwarp 14\nrun 400\nsave %s\ndump %s/a14.bin\n' % (ST, W), capture_output=True, text=True)
 dump = open(W + '/a14.bin', 'rb').read()
 KEYS = {1: 'B', 4: 'E', 16: 'U', 32: 'D', 64: 'L', 128: 'R', 256: 'A'}
@@ -39,7 +45,7 @@ with sync_playwright() as p:
 print('page errors:', errs or 'none')
 
 def driver_script(seq):
-    s = 'load %s\n' % ST
+    s = (OPTS or '') + 'load %s\n' % ST
     for part in seq.split(','):
         bits, n = map(int, part.split(':'))
         s += 'run %d %s\n' % (n, ''.join(KEYS[k] for k in KEYS if bits & k))

@@ -8,6 +8,7 @@
 #include "libretro.h"
 #include "gbcore.h"
 
+void gb_wide_reset(void);
 unsigned gbx_peek(unsigned a);
 unsigned gbx_color(unsigned bgr15);
 void gbx_poke(unsigned a, unsigned v);
@@ -23,7 +24,7 @@ static int16_t abuf[16384 * 2];
 static volatile int alen;
 static uint16_t pad;
 static int loaded, var_update;
-static void *rombuf;
+static void *rombuf; static size_t romsize;
 
 /* Core options we care about; everything else gets the core's default. */
 static struct { const char *k; char v[32]; } opts[] = {
@@ -107,12 +108,13 @@ int gb_init(const char *sys, const char *save) {
   return 0;
 }
 int gb_load_mem(const void *data, size_t n, const char *path) {
-  free(rombuf); rombuf = malloc(n); memcpy(rombuf, data, n);
+  free(rombuf); rombuf = malloc(n); memcpy(rombuf, data, n); romsize = n;
   struct retro_game_info gi = { path, rombuf, n, NULL };
   if (loaded) retro_unload_game();
   loaded = retro_load_game(&gi);
   if (loaded) retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
   alen = 0;
+  if (loaded) gb_wide_reset();
   return loaded ? 0 : -3;
 }
 int gb_load(const char *path) {
@@ -124,10 +126,22 @@ int gb_load(const char *path) {
   int r = gb_load_mem(b, n, path); free(b); return r;
 }
 void gb_unload(void) { if (loaded) retro_unload_game(); loaded = 0; }
-void gb_reset(void) { if (loaded) retro_reset(); }
+void gb_wide_reset(void);
+void gb_reset(void) { if (loaded) { retro_reset(); gb_wide_reset(); } }
 void gb_set_pad(unsigned bits) { pad = bits; }
-void gb_run(void) { if (loaded) retro_run(); }
-const uint16_t *gb_frame(int *w, int *h, int *fresh) { *w = fb_w; *h = fb_h; *fresh = fb_new; fb_new = 0; return fb; }
+/* WIDE VIEW (wide.c): the picture with the world around it, for the frame the core just finished. */
+int gb_wide_frame(const uint16_t *native, uint16_t *out);
+void gb_wide_reset(void);
+static uint16_t wfb[(160 + 2 * GB_WIDE_MAX) * 144];
+static int wfb_w, wide_skip;
+void gb_wide_skip(int skip) { wide_skip = skip; }
+void gb_run(void) { if (loaded) { retro_run(); if (fb_new && !wide_skip) wfb_w = gb_wide_frame(fb, wfb); } }
+const uint16_t *gb_frame(int *w, int *h, int *fresh) {
+  *fresh = fb_new; fb_new = 0;
+  if (wfb_w) { *w = wfb_w; *h = 144; return wfb; }
+  *w = fb_w; *h = fb_h; return fb;
+}
+const uint16_t *gb_native(int *w) { *w = fb_w; return fb; }
 int gb_audio(int16_t *out, int max) { int n = alen < max ? alen : max; memcpy(out, abuf, n * 2);
   memmove(abuf, abuf + n, (alen - n) * 2); alen -= n; return n; }
 double gb_fps(void) { struct retro_system_av_info av; retro_get_system_av_info(&av); return av.timing.fps; }
@@ -159,9 +173,11 @@ const uint8_t *gb_sram(size_t *n) { *n = loaded ? retro_get_memory_size(RETRO_ME
   return *n ? retro_get_memory_data(RETRO_MEMORY_SAVE_RAM) : NULL; }
 size_t gb_state_size(void) { return loaded ? retro_serialize_size() : 0; }
 int gb_state_save(void *buf, size_t n) { return loaded && retro_serialize(buf, n); }
-int gb_state_load(const void *buf, size_t n) { return loaded && retro_unserialize(buf, n); }
+int gb_state_load(const void *buf, size_t n) { int r = loaded && retro_unserialize(buf, n); if (r) gb_wide_reset(); return r; }
 void gb_set_overclock(int on) { gbx_overclock = on ? 1 : 0; }
 int gb_overclock_supported(void) { return 1; }
+int gb_backend(void) { return 0; }
+const uint8_t *gb_rom(size_t *n) { *n = loaded && rombuf ? romsize : 0; return *n ? rombuf : NULL; }
 
 /* Video snapshot (GB_SNAP_LEN bytes): VRAM banks 0+1 (0x4000) | BG pal 64 | OBJ pal 64 | OAM 160 |
  * LCDC SCY SCX WY WX | 64 colours as the core displays them (BG 0-31, OBJ 32-63), RGB888 (192). */

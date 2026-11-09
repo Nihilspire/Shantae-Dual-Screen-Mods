@@ -129,6 +129,7 @@ collectible, then tracing who wrote the new object's script pointer: the placeme
 | Object grid | bank $C39B; entry for screen (row r, col c) at ((\$C39A + r/2) << 8) \| (r & 1) << 7 \| c*4 = far pointer (lo, hi, bank) to a list |
 | List | 1 count byte, then 17-byte entries: x right, x left, y bottom, y top (16-bit, the spawn box), RAM byte that marks "already spawned" (2), object script (lo, hi, bank), 4 parameters (copied to object fields +$20..+$23) |
 | Scan | each frame, for the screens entering view ($FFC5-$FFCC = view edges, $C39C bits = scan direction); spawns into the list at HRAM $B3/$B4, nodes in WRAM bank 3 (player = $D000; +2 script PC, +$34 x, +$37 y) |
+| Scan width | The lists read are those of the screen columns the window's edges are in (00:0FA9 per list: overlap test of the entry's box with $FFC5-$FFCB; marker byte, then node +$27 = the marker's address). A window over 256 wide can lie across three columns and skip the middle one. The game's own is 176; WIDE VIEW keeps it at most 256 (0.45) |
 | Object types | 0A:4000 + 4k: `40 lo hi bank` = "go to script". The table runs past index 191 (0A:4338.. used by the big labyrinths) |
 | Collected flags | 04:4726 sets, 04:47CE tests: entry = flag table + 2 * param; byte offset from **$CB1B** and mask. Tables in bank $11: talismans $6EEF, heart holders $6EFF, baby squids $6F0F, fireflies $6F4F. Index = param 0 (param 3 for squids) |
 
@@ -421,7 +422,8 @@ drawn. Found while building it:
 |---|---|
 | Sprites switched off for the status bar | LCDC bit 1 is 0 at the end of every frame (the game turns sprites off at the status bar's line and on again at the top), so it can't tell whether sprites are shown |
 | Status bar | the window layer, map $9C00, WY = 128 in play (104 on town streets), WX = 7 |
-| Collision per 8x8 tile | metatile definition bytes 8-11 (TL TR BL BR). Seen: 00 open, 02 solid, 0C/0E slope edges (treated as solid), $2E stand-on-top (crates, ledges); others treated as ledges |
+| Collision per 8x8 tile | metatile definition bytes 8-11 (TL TR BL BR). Read from labelled level pictures, every code in all 68 places (0.35; meanings from how they sit in the art, not the game's code): 00 open; 02 solid; 04/06 and 36/38 45 degree slopes up/down to the right; 0C+0E shallow up (low, high half), 10+12 shallow down; 08/0A slanted ceilings; 2C pit floor; 2E one-way top (crates, branches); 3A/3C the fill under a one-way ramp; 3E underside of a tree's leaves; 62 invisible wall; 64 climbable (trunks, pillars, recesses in walls), 6C its diagonal edge; 6E cactus, 70 icicles (hazards) |
+| Room rectangle | $C9F4 (width) and $C9F6 (height) are the camera's range + 1: a one-screen room reads 1 and 1, so the room is that + 159 by that + 127 |
 | Is the picture the room? | state $C39D 2 or 5, LCD on, WY >= 64, and the BG map under the camera matches the level data on >= 70% of 6+ sampled tiles with at least 3 different tile numbers (the title screen matches blank level data otherwise) |
 
 ### Object nodes and bosses (0.20)
@@ -528,6 +530,41 @@ Called from native code with no script caller found: 19:688F, 19:68A7, 19:7069, 
 | Daylight | poke $C3E9/$C3EA = 0 before the warp: the area loads with day palettes |
 | Not captured | Snake (124, stays under water), Giant Snail (131), Cackle Mound type 37: their nodes never showed sprites (or weren't found) at the sightings tried |
 
+### Widescreen (WIDE VIEW: native/wide.c)
+
+**Since 0.43** the picture is built from the game's own drawing code, ported from the Shantae recomp (addresses are upstream's, each read here against the ROM; the CPU calls `gbx_hook` before the instruction at these):
+
+| Where | What it gives | Status |
+|---|---|---|
+| 00:0A57, 00:0A5C | LD A,(C9FB) / (C9FD): the VBlank handler copying the scroll to SCX/SCY, once the main loop has finished its frame. In a lag frame C9FB has moved on and the screen hasn't | Upstream, passes widetest's seam check |
+| 03:725A, 72F0, 726A, 7300 | ADD A,(HL) on C9D2/C9D4: the scroll is the camera $FFE1/3 plus these. Sprites use the camera alone; bosses drawn in the BG move through them | Upstream |
+| 01:667C | LDH A,($D7): DMA has just consumed a shadow OAM page ($FF46), and the page toggles. The page's draw list and the BG objects become this frame's | Upstream, statue test |
+| 00:1DC6 | LD A,(HL+): a metasprite before the cull. HL its layout (+32 count, +35 triples), top of the stack the cel (+8 graphics), position FF92/FF94 + FFE1/FFE3, page $FFD9 | Upstream, statue test |
+| 01:4F16 | LD A,($FFBD): an object drawn into the BG map before its cull: BC the object, +2E/+2F its picture (cols, rows, tile/attr pairs), +5B/+5F its cell | Upstream, widetest counts them |
+| 00:1AEB | LD A,(BC): script op 2C's graphics load: labyrinth pictures and key doors draw from the ROM bytes they asked for | Upstream, not exercised by a test |
+| 01:5E0B | The LYC=0 handler before it uploads palettes: the colours the top lines were really drawn with | Upstream, fades not checked closely |
+| Room | C9DB-C9E2 camera range + map sectors: pictures are 8-connected drawn sectors less bands of one metatile. Towns: map 67:9B with bounds 0..480, street wraps at 640, art 116 rows | Upstream |
+
+Built at the start of VBlank rather than upstream's line 0, as gambatte runs a frame at a time: nothing drawn from moves in between but the palettes. Not ported: its object activation (bounds read at their consumers) and 157 slots; the spawn patch below stays.
+
+The rest of this section is 0.37's strips; the spawn window and the timing notes still hold. tools/re/wide.py is the first prototype.
+
+A picture wider than 160 px, from driver dumps: the real screen in the middle, side strips from the level data and live
+VRAM/palettes, off-screen objects from their cels. Renders in `Renders\Widescreen test`.
+
+| What | Detail | Status |
+|---|---|---|
+| Spawn window | 01:506A: $FFC5 = camera X - 8 (`sub $08` at 01:506D), $FFC9 = camera X + 168 (`add $A8` at 01:5084); $FFC7/$FFCB the same in Y with - 8, + 152. An object spawns when its list entry's box overlaps this | Traced |
+| Despawn window | just above it, 01:5032..: $FFB5 = X - 80, $FFB7 = X + 240, $FFB9 = Y - 72, $FFBB = Y + 216 | Read, not traced |
+| Spawn patch | ROM file bytes $506E 08 -> 38 and $5085 A8 -> D8: the X window becomes 56 px past the screen, still inside the despawn window. Births moved to about 48 px past the edge (22 of 60; stock: 24 of 54 within 16 px). Peak drawn nodes 5 -> 6 over 12 rooms. Play changes a little: objects act earlier (the same walk ended elsewhere in 4 of 12 rooms) | Driver |
+| Level strips | Level data matches the live BG map on 99.84% of on-screen cells over all warp places. The misses are objects drawn into the BG map (handler 01:4F12) | Driver |
+| Object position | Screen X = (+$34) - $FFE1 + (+$39) + (+$3D), Y = (+$37) - $FFE3 + (+$3B) + (+$3F); sprite at OAM (Y + dy, X + dx). dy/dx are bytes: layout words +0 and +4 (the bounds) say which way they wrap. Handlers $62xx-$63xx only | Driver |
+| Timing | Nodes and $FFE1/3 at a frame's end show up on screen 2 frames later (a static statue crossing the join: strip 2 px ahead per px/frame of scroll from live nodes, 1 from the last frame's, 0 from the one before; 0.41 draws from that). Earlier notes here said 1 frame: wrong, the cel check against shadow OAM can't see it | Measured |
+| Cels vs shadow OAM | In play: 97.1% of cel sprites found there, 94.5% of its entries explained. The rest are objects with other handlers | Driver |
+| $FFD7 | XORed with 8 each frame: which VRAM bank the sprite stream goes to, not a flip. Flips are in the layout (+$31 picks it) | Read |
+| Limits | A room's end: nothing to show, so one-screen rooms gain nothing. BG-drawn objects off screen aren't in the strips yet (their cels could be). Objects with other handlers aren't either. Colour cycling and tile animation are live, so they match. RetroArch's picture can't be changed from Shantae Link | Seen |
+| Truth test | tests/widetest.py: walk until what was in the strip has scrolled onto the real screen, compare pixels | Driver |
+
 ### Sprite cels in the ROM (found after 0.29)
 
 Object sprites are stored uncompressed in the ROM. Draw routine 00:1DA3/1DAD, OAM writers jumped to through 00:01AD.. (unrolled at 00:2036..).
@@ -568,3 +605,24 @@ descriptor code (tests/mock_ra.py).
 | $FFFE | 3 on GBA hardware, 1 on GBC (0 before the game sets it) | Verified (484/503 = 3 in GBA-mode states) |
 | $FF8B | Buttons held (A 1, B 2, Select 4, Start 8, R $10, L $20, U $40, D $80); $FF8D the same in play | Verified (Select, Down) |
 | Select | Starts a dance in play; leaves $C28F-$C2B5 set (not a "dancing" flag) | Verified |
+
+## 3DS Virtual Console (Luma plugin feasibility, Nov 2 2026)
+
+Where Nintendo's 3DS VC emulator keeps the Game Boy's memory, for a Luma3DS (3GX) plugin that draws the Link screen
+next to the official game. Title `00040000000BE500` (Shantae, USA, product CTR-N-QAVE; the emulator's buildtime.txt
+says 28 Jun 2013). Its RomFS holds the same ROM (`rom/CGBB3AE0.963`, CRC32 `E994B59B`), `config.ini` (the emulator's
+settings) and `CGBB3AE0.963.patch` (Nintendo's per-game fixes: "FPA" flashing-light dimming at ROM addresses, and a
+"title jump"). Found from a GodMode9-decrypted CIA run in Azahar with its GDB stub, matched against driver dumps of the
+title screen (scripts: tools/re/vc/). Process addresses are virtual; .code loads at 0x100000 (text), .data at 0x1B6000.
+
+| What | Where / detail | Status |
+|---|---|---|
+| Pointer table in .data | `0x1BAD98` ROM, `0x1BAD9C` **WRAM** (32 KB, banks 0-7 back to back: bank n at +n*$1000), `0x1BADA0` **VRAM** (16 KB, bank 1 at +$2000), `0x1BADA4` +$90 past HRAM (cart RAM? unchecked), `0x1BADA8` OAM ($A0), `0x1BADAC` **HRAM** (FF80-FFFE), `0x1BADB0` **I/O** (FF00-FF7F, as the CPU reads them) | Verified (two boots, Azahar) |
+| Current banks | `0x1BAE70` the WRAM bank in $D000 (WRAM + SVBK*$1000), `0x1BAE74` the VRAM bank in $8000 | Seen once (SVBK 3) |
+| Values in Azahar | the heap block: ROM 0x08800010, WRAM 0x08C2CB24, VRAM 0x08C34B34, OAM 0x08C38B44, I/O 0x08C38BF4, HRAM 0x08C38C74; same on two boots. A plugin should read the table rather than these: the heap may lie elsewhere on a real 3DS | Verified (Azahar only) |
+| Checks | WRAM banks 1-3 and 7 match gambatte's 12/12 sampled chunks; HRAM's sprite-DMA routine and variables, KEY1 = $FE (double speed), SVBK = $FB match | Verified |
+| On a real 3DS (plugin 0.1, New 3DS) | The table held the same heap addresses as in Azahar (WRAM 0x08C2CB24, HRAM 0x08C38C74, I/O 0x08C38BF4, VRAM 0x08C34B34) | Verified (device photo) |
+| VC state | u8 at `0x1BB500`: 1 = game running, 11 = VC menu (after a tap). Read by the VC's per-frame switch at 0x102940 | Verified (Azahar) |
+| VC input | The VC's input struct at `0x21363C` (filled by 0x108C38 each frame): +0 held, +4/+8 pressed/released, +$14 touching, +$18 touch pressed, +$1C released, +$20/+$24 touch x/y. A tap opens the VC menu (state 11) and pauses the game, even under the plugin's overlay | Verified (Azahar; device: tap pauses) |
+| Touch block | 0x108D48, 0x108D64 (`ldrb r1,[sp,#4]` E5DD1004 -> `mov r1,#0` E3A01000) and 0x108D7C (E5DD0004 -> `mov r0,#0` E3A00000): the VC sees no touch, buttons unchanged. Two taps with it: state stays 1, no menu, 60 FPS | Verified (Azahar, patched through GDB) |
+| Not found yet | CGB palette RAM (the game's copies at $C400/$C440 do instead) | Open |

@@ -1,4 +1,64 @@
-# Shantae Dual 3DS (0.13-alpha)
+# Shantae Dual 3DS (0.16-alpha)
+
+0.16-alpha (Nov 9 2026): **Shantae Dual 0.45's WIDE VIEW fix** (native/wide.c, shared): the spawn window is capped at 256 pixels
+(`SPAWN_MAX` 48). The 3DS's 268-wide view asked for 62 per side, which could skip an object list column, so Water Town Gates had no
+way out or into the town (and 10 more places lost objects). Enemies now appear 40 pixels past the real screen.
+- Tested on the driver: `tests/spawntest.py 268` (all 68 places, nothing lost) and `widetest` pass. Not run in Azahar or on the
+  device; the picture code is unchanged since 0.15.
+
+0.15-alpha (Nov 6 2026), **WIDE VIEW** from Shantae Dual 0.44 (native/wide.c, the same file as Android):
+- **What it does:** in level rooms the level continues beside the real picture across the whole top screen: 268 Game Boy
+  pixels wide at the app's 1.5x, cropped by a pixel each side to the 400. The real 160 x 144 stays exact in the middle.
+  Rooms that fit the screen, the inventory and menus show the real picture alone. The game's spawn window widens to match, as
+  on Android, so objects act a little earlier.
+- **Setting:** SETTINGS > SYSTEM > WIDE VIEW, on by default. New 3DS speed only: an old 3DS shows NEW 3DS ONLY, and OLD 3DS SPEED
+  turns it off while it's on. The file's byte is `narrow`, because 0.14's file holds 0 there.
+- **Borders:** WIDE VIEW covers the side panels (IN THIS ROOM, the place, the clock), and the 12 lines above and below it are
+  black. The theme and panels come back whenever the real picture is alone. State thumbnails are from the real picture (`gb_native`).
+- **Core:** the CPU's hook check is no longer compiled out on the 3DS. `gbx_hook_on` is read once per `CPU::process`, like `gbxOc`.
+- **The first port cost too much on ARM** (Azahar, same place on the bridge, GB + TOP ms: 13.2 + 1.5 off, 19.2 + 2.4 on), against
+  about 20% of a frame on the desktop. Callgrind's list, with the fixes (`wide.c`, `main.c`):
+  - Nothing is worked out under the real picture: level spans, map cells, sprites.
+  - The top lines' fade correction only runs when the palettes really moved since line 0.
+  - `gbx_color` runs `powf` on each channel, 128 calls a frame: a table on the 3DS (Android has COLORS, so it still asks).
+  - No 64-bit pixel shifting: two bytes shifted a bit at a time, flipped tiles through a table.
+  - `drawTop` copies every third column instead of working it out.
+  - One picture per loop: fast-forward and FRAME SKIP's unseen frames don't build it (`gb_wide_skip`).
+  - Result: 15.6 + 1.9 on, 13.2 + 1.2 off. **Azahar still shows 30 FPS with it on**, as 18.1 ms is over 16.7, but Azahar's clock isn't the device's. At old
+    3DS speed the device ran 2.1x Azahar's times, so 3x the clock suggests about 13 ms on a New 3DS: an estimate, not measured.
+- **Tested:**
+  - Driver: 504 shots through 9 warps with walking and arrival fades, 415 of them wide, at widths 268 and 256: byte-identical before and after the speed work.
+    `widetest` passes at SIDE 48 and 54. `view 268` then `160` leaves the same RAM after 1200 frames as never turning it on.
+  - Azahar (New 3DS mode): the picture on the bridge, ON/OFF from SETTINGS (the taps, the new layout, off brings the borders back), the
+    inventory and back, fast-forward, saving slot 1 (thumbnail of the real picture). In Azahar's old 3DS mode, with a `.cfg` from 0.14, it stays off. Turning OLD 3DS SPEED on while WIDE VIEW is on wasn't run.
+  - **On the user's New 3DS (Nov 6, WIDE VIEW on):** 60 FPS, GB 8.6 TOP 1.6 LINK 0.8 MAX 17.8 ms, so 11.0 of the 16.7 ms. One reading, room not recorded. The estimate above was 13.
+  - **Not tested:** towns, boss arenas and dialogue on the 3DS build; the busiest rooms' timing.
+
+0.14-alpha (Nov 6 2026), from the Android app (link.js, monsters.js):
+- **Icons from the ROM:** the 22 item, stone, talisman, squid and firefly icons are built at start (the inventory's LZSS
+  tilesets and BG palettes), so they're there from the first boot, unowned ones faint. The capture from the inventory
+  screen and `shantae-icons.bin` are gone (the app deletes an old file).
+- **Shantae on the SHANTAE tab:** the inventory's left panel and her sprite cels from the ROM, each Fighter's Gear piece
+  faint until bought. The page follows link.js drawStatusFigure: items in framed slots, stones, talismans, squids,
+  fireflies, gear, the equipped item, and below her what each piece she has lets her do. Tap DANCES for the list.
+- **Auto dance:** tap a learned dance in the list and the app dances it, on the game's own frames (`link_dance_pad`, once
+  per frame run, so fast-forward and frame skip keep the beat). The list opens with Select, with the note at the right of
+  the tab bar, or from DANCES on the SHANTAE tab, and shows arrows now.
+  - **After the player's own Select** the beat is already running and it doesn't stop by itself; a second Select does
+    nothing, so inputs on the app's own count missed the beat (Monkey failed at every wait from 5 to 600 frames). A dance
+    can start on any later beat (frame 20 + 64n from the press, about +-10), so the app now joins the running beat.
+- **PROGRESS > MONSTERS:** 46 enemies, each lit up the first time it's on screen (object script PC -> type, as
+  monsters.js), the picture a sprite cel from the ROM in the area's colours saved when met. 3 pages; tap one for its name
+  and where. Kept in `shantae-monsters.bin`. MONSTERS MET is on the ending card, and a signed card's record is now `SDH2`
+  (with the count; `SDH1` records stay as they are).
+- **FPS:** off the bottom bar and the title screen; it's in the menu's title bar, on the slots and SETTINGS pages. (Test
+  builds still print their frame count in the tab bar.)
+- **Tested:**
+  - `linkhost` (new: prints the cel bank, hearts, place and monsters; env `MONS=file`): all 11 dances from the note and
+    after Select + 37 frames (transforms by cel bank, Healing by hearts, the 5 warps by place), Monkey after Select at 18
+    waits from 0 to 600 frames; all 46 pictures forced on; 7 monsters met in a state sweep.
+  - Azahar: a new game (faint gear and icons), the MONSTERS tab, the list by the note, a 0.13 `.cfg` loading, FPS on SETTINGS.
+  - Not tested: any of it on a 3DS; auto dance in Azahar (a new game has no dances); a monster lighting up in Azahar.
 
 0.13-alpha (Nov 2 2026), after the device's timing line at OLD 3DS SPEED read GB 24.0 TOP 3.6 LINK 4.8 MAX 52.1 ms:
 - The Game Boy frame alone is over 16.7 ms at 268 MHz without the L2 cache, so FRAME SKIP can only get ~41 game fps
@@ -254,6 +314,8 @@ chat): build `linkhost.c` + `linkscr.c` + `../gbcore.c` with `out/host/libgambat
   the dance list, completion counts.
 - **Not yet:**
   - rooms remembered across restarts (the map, zoom, drag and map cards are in)
-  - a launcher with the title music, an FF toggle (fast-forward is hold-only), the 3D view (story, stats, the ending
-    card, a borders setting and 3 state slots came in 0.9-alpha; map cards, boss bars and key rebinding in 0.10)
+  - a launcher with the title music, an FF toggle (fast-forward is hold-only), turbo buttons, playtest codes and the
+    room warp, the 3D view, the display and GBA MODE settings (story, stats, the ending card, a borders setting and 3
+    state slots came in 0.9-alpha; map cards, boss bars and key rebinding in 0.10; ROM icons, Shantae, auto dance and
+    monsters in 0.14)
 - **Not at all:** Android screen modes (split, hinge, overlay), the touch-pad overlay, the WebView menus.
